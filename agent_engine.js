@@ -1,86 +1,119 @@
 /**
- * OMENA Autonomous Agent Workbench Engine
- * High-performance execution engine supporting:
- * - Direct PowerShell & Shell Execution
- * - Chrome DevTools Remote Browser Automation
- * - Workspace File & Codebase Operations
- * - Document Ops (PDF, XLSX, CSV)
- * - Multi-Tier Persistent Memory Sync
- * - Real-Time SSE Token & Tool Event Streaming
+ * OMENA Enterprise Agent Workbench Engine v2.0
+ * Multi-Provider Capability Adapters, Security Guardrails, and Safe Event Protocol
  */
 
-import { exec, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
+import { SecurityGuard } from './security.js';
+import { adapterManager } from './providers/adapter_manager.js';
+import { WorkbenchDatabase } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const WORKSPACE_ROOT = path.resolve(__dirname, '..', '..');
+const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || path.resolve(__dirname, '..', '..');
 const MEMORY_DIR = path.join(WORKSPACE_ROOT, 'storage', 'memory');
 const ARTIFACTS_DIR = path.join(WORKSPACE_ROOT, 'storage', 'artifacts');
-const BRAIN_DIR = path.join(process.env.USERPROFILE || 'C:\\Users\\Administrator', '.gemini', 'antigravity', 'brain', 'e8d8888b-3e29-4762-9abb-431dbd3bf650');
+const UPLOADS_DIR = path.join(WORKSPACE_ROOT, 'storage', 'workbench_uploads');
 
 export class AgentEngine {
-  constructor() {
+  constructor(db = null) {
+    this.db = db || new WorkbenchDatabase();
     this.ensureDirs();
   }
 
   ensureDirs() {
-    [MEMORY_DIR, ARTIFACTS_DIR, path.join(WORKSPACE_ROOT, 'storage', 'workbench_uploads')].forEach(d => {
+    [MEMORY_DIR, ARTIFACTS_DIR, UPLOADS_DIR].forEach(d => {
       if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
     });
   }
 
   /**
-   * Process a prompt and stream events via SSE callback
-   * @param {string} prompt 
-   * @param {function} emit - (event) => void
-   * @param {object} options - { model, credentials }
+   * Process prompt and stream structured events:
+   * text_chunk, tool_start, tool_log, tool_done, browser_frame, done
    */
   async processPromptStream(prompt, emit, options = {}) {
     const startTime = Date.now();
-    const cleanPrompt = prompt.trim();
+    const cleanPrompt = (prompt || '').trim();
+    const sessionId = options.sessionId || 'default_session';
     const selectedModel = options.model || 'gemini-2.0-flash';
     const credentials = options.credentials || {};
 
-    // 1. Detect Intent
-    const intent = this.detectIntent(cleanPrompt);
+    const adapter = adapterManager.getAdapter(selectedModel);
+    const capabilities = adapter.getCapabilities();
 
-    emit({ 
-      type: 'token', 
-      token: `🧠 **Engine:** \`${selectedModel}\` | Analyzing request for **${intent.category}**...\n\n` 
+    // Persist user prompt in SQLite
+    this.db.addMessage(sessionId, {
+      role: 'user',
+      content: cleanPrompt
     });
 
-    try {
-      // If external provider credentials are supplied and it's a general question, call the provider API
-      const hasProviderKey = (selectedModel.startsWith('gemini') && (credentials.geminiKey || process.env.GEMINI_API_KEY)) ||
-                             (selectedModel.startsWith('gpt') && (credentials.openaiKey || process.env.OPENAI_API_KEY)) ||
-                             (selectedModel.startsWith('claude') && (credentials.claudeKey || process.env.ANTHROPIC_API_KEY));
+    const recordedTools = [];
+    const recordedArtifacts = [];
+    let assistantText = '';
 
-      if (intent.category === 'BROWSER') {
-        await this.handleBrowserTask(intent, cleanPrompt, emit);
-      } else if (intent.category === 'SHELL') {
-        await this.handleShellTask(intent, cleanPrompt, emit);
-      } else if (intent.category === 'CODE_OR_FILE') {
-        await this.handleFileTask(intent, cleanPrompt, emit);
-      } else if (intent.category === 'MEMORY_OR_STATUS') {
-        await this.handleStatusTask(intent, cleanPrompt, emit);
-      } else if (hasProviderKey) {
-        await this.callExternalProvider(selectedModel, cleanPrompt, credentials, emit);
+    // Wrapped emitter to collect data for persistence
+    const safeEmit = (event) => {
+      if (event.type === 'text_chunk') {
+        assistantText += event.token || '';
+      } else if (event.type === 'tool_done') {
+        recordedTools.push(event);
+      } else if (event.type === 'browser_frame') {
+        recordedArtifacts.push(event);
+      }
+      emit(event);
+    };
+
+    // Detect Intent
+    const intent = this.detectIntent(cleanPrompt);
+
+    try {
+      const isToolRequest = ['BROWSER', 'SHELL', 'CODE_OR_FILE', 'MEMORY_OR_STATUS'].includes(intent.category);
+
+      if (isToolRequest && capabilities.tools) {
+        if (intent.category === 'BROWSER') {
+          await this.handleBrowserTask(intent, cleanPrompt, safeEmit);
+        } else if (intent.category === 'SHELL') {
+          await this.handleShellTask(intent, cleanPrompt, safeEmit);
+        } else if (intent.category === 'CODE_OR_FILE') {
+          await this.handleFileTask(intent, cleanPrompt, safeEmit);
+        } else if (intent.category === 'MEMORY_OR_STATUS') {
+          await this.handleStatusTask(intent, cleanPrompt, safeEmit);
+        }
       } else {
-        await this.handleGeneralTask(cleanPrompt, emit, selectedModel);
+        // Multi-Provider Direct Streaming
+        await adapter.streamChat({
+          prompt: cleanPrompt,
+          credentials,
+          emit: safeEmit
+        });
+
+        if (!assistantText) {
+          await this.handleGeneralTask(cleanPrompt, safeEmit, selectedModel);
+        }
       }
     } catch (err) {
-      emit({ type: 'token', token: `\n\n⚠️ **Execution Error:** ${err.message}` });
+      safeEmit({
+        type: 'text_chunk',
+        token: `\n\n⚠️ **Execution Notice:** ${err.message}`
+      });
     }
 
-    emit({
-      type: 'complete',
-      durationMs: Date.now() - startTime
+    const durationMs = Date.now() - startTime;
+
+    // Persist assistant response in SQLite
+    this.db.addMessage(sessionId, {
+      role: 'assistant',
+      content: assistantText,
+      tools: recordedTools,
+      artifacts: recordedArtifacts
+    });
+
+    safeEmit({
+      type: 'done',
+      durationMs
     });
   }
 
@@ -88,27 +121,34 @@ export class AgentEngine {
     const lower = prompt.toLowerCase();
 
     // Browser automation
-    if (lower.includes('browser') || lower.includes('chrome') || lower.includes('google') || 
-        lower.includes('facebook') || lower.includes('website') || lower.includes('navigate') || 
-        lower.includes('click') || lower.includes('screenshot') || lower.includes('search')) {
+    if (
+      lower.includes('browser') || lower.includes('chrome') || lower.includes('website') ||
+      lower.includes('navigate') || lower.includes('url') || lower.includes('http') ||
+      lower.includes('screenshot') || lower.includes('hacker news') || lower.includes('webpage')
+    ) {
       return { category: 'BROWSER', raw: prompt };
     }
 
-    // Direct shell / terminal
-    if (lower.startsWith('run ') || lower.startsWith('powershell') || lower.startsWith('cmd') || 
-        lower.startsWith('exec') || lower.includes('dir') || lower.includes('ls') || 
-        lower.includes('get-') || lower.includes('node ') || lower.includes('git ')) {
+    // Direct shell
+    if (
+      lower.startsWith('run ') || lower.startsWith('powershell ') || lower.startsWith('cmd ') ||
+      lower.startsWith('exec ') || lower.startsWith('bash ') || lower.includes('get-service') ||
+      lower.includes('get-process') || lower.includes('git status') || lower.includes('npm ') ||
+      lower.includes('docker ')
+    ) {
       return { category: 'SHELL', raw: prompt };
     }
 
     // Code / File system
-    if (lower.includes('file') || lower.includes('read') || lower.includes('write') || 
-        lower.includes('code') || lower.includes('diff') || lower.includes('project')) {
+    if (
+      lower.includes('file') || lower.includes('read') || lower.includes('write') ||
+      lower.includes('code') || lower.includes('directory') || lower.includes('project structure')
+    ) {
       return { category: 'CODE_OR_FILE', raw: prompt };
     }
 
-    // Status / Memory
-    if (lower.includes('status') || lower.includes('memory') || lower.includes('health') || lower.includes('state')) {
+    // Diagnostics / Status
+    if (lower.includes('status') || lower.includes('memory') || lower.includes('health') || lower.includes('ready')) {
       return { category: 'MEMORY_OR_STATUS', raw: prompt };
     }
 
@@ -116,252 +156,284 @@ export class AgentEngine {
   }
 
   async handleBrowserTask(intent, prompt, emit) {
-    emit({
-      type: 'tool_start',
-      toolName: 'Chrome DevTools Engine',
-      args: { action: 'navigate_and_inspect', target: prompt }
-    });
+    const callId = `call_${Date.now()}`;
+    let targetUrl = 'https://news.ycombinator.com';
 
-    const toolStart = Date.now();
-
-    // Determine target URL or action
-    let targetUrl = 'https://www.google.com';
     const match = prompt.match(/https?:\/\/[^\s]+/);
     if (match) {
       targetUrl = match[0];
-    } else if (prompt.toLowerCase().includes('facebook')) {
-      targetUrl = 'https://www.facebook.com';
-    } else if (prompt.toLowerCase().includes('search')) {
-      const q = encodeURIComponent(prompt.replace(/.*search (for )?/i, '').trim());
-      targetUrl = `https://www.google.com/search?q=${q}`;
+    } else if (prompt.toLowerCase().includes('google')) {
+      targetUrl = 'https://www.google.com';
+    } else if (prompt.toLowerCase().includes('wikipedia')) {
+      targetUrl = 'https://www.wikipedia.org';
     }
 
-    // Execute via node browser helper
-    const script = `
-      import http from 'http';
-      import fs from 'fs';
-      import { execSync } from 'child_process';
-      
-      const portFile = 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Google\\\\Chrome\\\\User Data\\\\DevToolsActivePort';
-      const exists = fs.existsSync(portFile);
-      console.log(JSON.stringify({ portActive: exists, targetUrl: '${targetUrl}', timestamp: new Date().toISOString() }));
-    `;
-
-    let resultOutput = `Target: ${targetUrl}\nNavigating through Chrome DevTools port 9222...`;
+    // SSRF Guardrail validation
     try {
-      const { stdout } = await execAsync(`node --input-type=module -e "${script.replace(/\n/g, ' ')}"`, { cwd: WORKSPACE_ROOT });
-      resultOutput += `\nStatus: Port 9222 Connected.\n${stdout}`;
-    } catch (e) {
-      resultOutput += `\nCDP Note: ${e.message}`;
-    }
-
-    emit({
-      type: 'tool_end',
-      toolName: 'Chrome DevTools Engine',
-      result: resultOutput,
-      durationMs: Date.now() - toolStart
-    });
-
-    // Provide visual monitor artifact
-    const monitorPath = path.join(ARTIFACTS_DIR, 'computer_monitor_screen.png');
-    if (fs.existsSync(monitorPath)) {
+      targetUrl = SecurityGuard.validateUrlForSSRF(targetUrl);
+    } catch (ssrfErr) {
       emit({
-        type: 'artifact',
-        title: '27" 4K Monitor Capture',
-        sub: `Rendered viewport for: ${targetUrl}`,
-        imgUrl: '/api/browser/monitor'
+        type: 'tool_start',
+        tool: 'Browser Engine',
+        callId,
+        input: { target: targetUrl }
       });
+      emit({
+        type: 'tool_log',
+        callId,
+        chunk: `[Blocked] ${ssrfErr.message}`
+      });
+      emit({
+        type: 'tool_done',
+        callId,
+        result: ssrfErr.message,
+        durationMs: 5,
+        exitCode: 1
+      });
+      emit({
+        type: 'text_chunk',
+        token: `⛔ **Security Notice:** Target URL was blocked by SSRF Guardrails.\n*${ssrfErr.message}*`
+      });
+      return;
     }
-
-    emit({
-      type: 'token',
-      token: `✅ **Browser Task Completed Successfully!**\n\n- **Target URL:** \`${targetUrl}\`\n- **Remote Session:** Chrome DevTools (Port \`9222\`)\n- **Hardware Acceleration:** Genuine human profile inherited\n\nYou can inspect the photorealistic 27" monitor capture directly above.`
-    });
-  }
-
-  async handleShellTask(intent, prompt, emit) {
-    let cmd = prompt;
-    if (cmd.toLowerCase().startsWith('run ')) cmd = cmd.slice(4).trim();
-    if (cmd.toLowerCase().startsWith('powershell ')) cmd = cmd.slice(11).trim();
 
     emit({
       type: 'tool_start',
-      toolName: 'PowerShell Autonomous Runner',
-      args: { command: cmd }
+      tool: 'Chrome DevTools Protocol (CDP)',
+      callId,
+      input: { action: 'navigate', url: targetUrl }
     });
 
-    const toolStart = Date.now();
-    let stdout = '';
-    let stderr = '';
+    const start = Date.now();
+    let runnerStdout = '';
+    let runnerStderr = '';
+
+    const runnerScript = path.join(WORKSPACE_ROOT, 'tools', 'browser', 'execute_real_browser.js');
+
+    const proc = spawn('node', [runnerScript, targetUrl], {
+      cwd: WORKSPACE_ROOT,
+      env: { ...process.env, WORKSPACE_ROOT }
+    });
+
+    proc.stdout.on('data', chunk => {
+      const str = chunk.toString();
+      runnerStdout += str;
+      emit({ type: 'tool_log', callId, chunk: str });
+    });
+
+    proc.stderr.on('data', chunk => {
+      const str = chunk.toString();
+      runnerStderr += str;
+      emit({ type: 'tool_log', callId, chunk: str });
+    });
+
+    const exitCode = await new Promise(resolve => {
+      proc.on('close', resolve);
+    });
+
+    const durationMs = Date.now() - start;
+    let browserData = null;
 
     try {
-      const res = await execAsync(`powershell -NoProfile -Command "${cmd.replace(/"/g, '\\"')}"`, {
-        cwd: WORKSPACE_ROOT,
-        timeout: 20000
-      });
-      stdout = res.stdout;
-      stderr = res.stderr;
-    } catch (e) {
-      stderr = e.message;
-      stdout = e.stdout || '';
+      browserData = JSON.parse(runnerStdout.trim());
+    } catch {
+      // Non-JSON output
     }
 
     emit({
-      type: 'tool_end',
-      toolName: 'PowerShell Autonomous Runner',
-      result: stdout.trim() || stderr.trim() || 'Executed with exit code 0',
-      durationMs: Date.now() - toolStart
+      type: 'tool_done',
+      callId,
+      result: browserData 
+        ? `Page: ${browserData.title} | Links: ${browserData.summary?.linksCount || 0}`
+        : (runnerStdout.trim() || runnerStderr.trim() || 'Navigation complete'),
+      durationMs,
+      exitCode
+    });
+
+    if (exitCode === 0 && browserData) {
+      emit({
+        type: 'browser_frame',
+        url: browserData.url,
+        title: browserData.title,
+        frameUrl: '/api/browser/frame',
+        monitorUrl: '/api/browser/monitor'
+      });
+
+      emit({
+        type: 'text_chunk',
+        token: `✅ **Live Page Navigated & Inspected:**\n- **URL:** \`${browserData.url}\`\n- **Title:** **${browserData.title}**\n- **Elements Discovered:** ${browserData.summary?.headings?.length || 0} headings, ${browserData.summary?.linksCount || 0} links\n\n*The real viewport screenshot and photorealistic monitor render are available in the slide-up drawer.*`
+      });
+    } else {
+      emit({
+        type: 'text_chunk',
+        token: `⚠️ **Browser Run Alert:** Finished with code ${exitCode}.\n\`\`\`\n${runnerStderr.trim() || runnerStdout.trim()}\n\`\`\``
+      });
+    }
+  }
+
+  async handleShellTask(intent, prompt, emit) {
+    const callId = `call_${Date.now()}`;
+    let cmd = prompt;
+    ['run ', 'powershell ', 'cmd ', 'exec ', 'bash '].forEach(prefix => {
+      if (cmd.toLowerCase().startsWith(prefix)) cmd = cmd.slice(prefix.length).trim();
+    });
+
+    // Guardrail Check
+    const safety = SecurityGuard.validateCommand(cmd);
+    if (!safety.allowed) {
+      emit({
+        type: 'tool_start',
+        tool: 'Terminal Operator',
+        callId,
+        input: { command: cmd }
+      });
+      emit({
+        type: 'tool_log',
+        callId,
+        chunk: `[Blocked] ${safety.reason}`
+      });
+      emit({
+        type: 'tool_done',
+        callId,
+        result: safety.reason,
+        durationMs: 2,
+        exitCode: 1
+      });
+      emit({
+        type: 'text_chunk',
+        token: `⛔ **Command Blocked by Safety Policy:**\n*${safety.reason}*`
+      });
+      return;
+    }
+
+    emit({
+      type: 'tool_start',
+      tool: 'Terminal Operator',
+      callId,
+      input: { command: cmd }
+    });
+
+    const start = Date.now();
+    let stdoutData = '';
+    let stderrData = '';
+
+    const isWindows = process.platform === 'win32';
+    const shellBinary = isWindows ? 'powershell.exe' : 'bash';
+    const shellArgs = isWindows ? ['-NoProfile', '-Command', cmd] : ['-c', cmd];
+
+    const proc = spawn(shellBinary, shellArgs, {
+      cwd: WORKSPACE_ROOT,
+      env: process.env
+    });
+
+    proc.stdout.on('data', chunk => {
+      const str = chunk.toString();
+      stdoutData += str;
+      emit({ type: 'tool_log', callId, chunk: str });
+    });
+
+    proc.stderr.on('data', chunk => {
+      const str = chunk.toString();
+      stderrData += str;
+      emit({ type: 'tool_log', callId, chunk: str });
+    });
+
+    const exitCode = await new Promise(resolve => {
+      proc.on('close', resolve);
+    });
+
+    const durationMs = Date.now() - start;
+
+    emit({
+      type: 'tool_done',
+      callId,
+      result: (stdoutData.trim() || stderrData.trim()).slice(0, 300) || 'Done',
+      durationMs,
+      exitCode
     });
 
     emit({
-      type: 'token',
-      token: `### Terminal Output\n\`\`\`powershell\n${stdout.trim() || stderr.trim() || 'Command completed with no output.'}\n\`\`\``
+      type: 'text_chunk',
+      token: `### Terminal Output (Exit Code ${exitCode})\n\`\`\`${isWindows ? 'powershell' : 'bash'}\n${(stdoutData.trim() || stderrData.trim() || 'Command completed with no output.')}\n\`\`\``
     });
   }
 
   async handleFileTask(intent, prompt, emit) {
+    const callId = `call_${Date.now()}`;
     emit({
       type: 'tool_start',
-      toolName: 'Workspace Filesystem & AST',
-      args: { query: prompt }
+      tool: 'Workspace Filesystem',
+      callId,
+      input: { query: prompt }
     });
 
-    const toolStart = Date.now();
+    const start = Date.now();
     const files = fs.readdirSync(WORKSPACE_ROOT, { withFileTypes: true })
       .filter(d => !d.name.startsWith('.') && d.name !== 'node_modules')
       .map(d => `${d.isDirectory() ? '📁' : '📄'} ${d.name}`);
 
     emit({
-      type: 'tool_end',
-      toolName: 'Workspace Filesystem & AST',
-      result: files.join('\n'),
-      durationMs: Date.now() - toolStart
+      type: 'tool_log',
+      callId,
+      chunk: `Found ${files.length} top-level entries in workspace`
+    });
+
+    const durationMs = Date.now() - start;
+
+    emit({
+      type: 'tool_done',
+      callId,
+      result: `Listed ${files.length} items`,
+      durationMs,
+      exitCode: 0
     });
 
     emit({
-      type: 'token',
-      token: `### Workspace Filesystem\nHere are the top-level files and tools active in this project:\n\n${files.map(f => `- ${f}`).join('\n')}`
+      type: 'text_chunk',
+      token: `### Workspace Directory (${path.basename(WORKSPACE_ROOT)})\n${files.map(f => `- ${f}`).join('\n')}`
     });
   }
 
   async handleStatusTask(intent, prompt, emit) {
+    const callId = `call_${Date.now()}`;
     emit({
       type: 'tool_start',
-      toolName: 'System & Memory Diagnostics',
-      args: { check: 'all' }
-    });
-
-    const toolStart = Date.now();
-    const taskMemoryFile = path.join(MEMORY_DIR, 'task_memory.json');
-    let taskMem = {};
-    if (fs.existsSync(taskMemoryFile)) {
-      try { taskMem = JSON.parse(fs.readFileSync(taskMemoryFile, 'utf8')); } catch {}
-    }
-
-    const report = {
-      system: 'Windows Server 2022',
-      node: process.version,
-      chromeDevToolsPort: 9222,
-      activeProfile: taskMem.context?.googleAccount || 'developeromenabenz@gmail.com',
-      telegramGateway: taskMem.context?.telegramGateway || 'ACTIVE',
-      totalStepsExecuted: taskMem.stepJournal?.length || 28
-    };
-
-    emit({
-      type: 'tool_end',
-      toolName: 'System & Memory Diagnostics',
-      result: JSON.stringify(report, null, 2),
-      durationMs: Date.now() - toolStart
-    });
-
-    emit({
-      type: 'token',
-      token: `### System Status & Telemetry\n- **OS:** Windows Server 2022 (AWS EC2)\n- **Node.js:** \`${report.node}\`\n- **Chrome Port:** \`9222\` (DevTools Connected)\n- **Active Account:** \`${report.activeProfile}\`\n- **Telegram Gateway:** \`${report.telegramGateway}\`\n- **Total Journal Steps:** \`${report.totalStepsExecuted}\``
-    });
-  }
-
-  async handleGeneralTask(prompt, emit, selectedModel = 'gemini-2.0-flash') {
-    emit({
-      type: 'token',
-      token: `I am **OMENA Autonomous Agent**, your AI Agentic IDE & Workbench operating on model \`${selectedModel}\`.\n\nI can execute autonomous tasks for you from this mobile interface:\n- 🌐 **Remote Chrome Automation:** Control real Chrome on port 9222, fill forms, take live screenshots.\n- ⚡ **Autonomous PowerShell:** Run system commands, git, npm, and Docker.\n- 📄 **Document Operations:** Generate PDFs, Excel workbooks, Word docs, and archives.\n- 🧠 **Persistent Memory:** Track long-running pipelines and checkpoint states.\n- 🤖 **Multi-Model Subscriptions:** Link your ChatGPT Plus or Gemini subscription in Settings ⚙️ to route all reasoning through your preferred model.\n\nTry sending a command like:\n* \`Run powershell Get-Process -Name chrome\`\n* \`Navigate to https://news.ycombinator.com\`\n* \`Check system memory and task journal\``
-    });
-  }
-
-  async callExternalProvider(model, prompt, credentials, emit) {
-    emit({
-      type: 'tool_start',
-      toolName: `Cloud AI Dispatcher (${model})`,
-      args: { model, promptLength: prompt.length }
+      tool: 'Health & Diagnostics',
+      callId,
+      input: { query: prompt }
     });
 
     const start = Date.now();
+    const dbStatus = this.db.healthCheck();
+    const mem = process.memoryUsage();
+    const uptimeSec = Math.round(process.uptime());
 
-    try {
-      // 1. Google Gemini
-      if (model.startsWith('gemini')) {
-        const apiKey = credentials.geminiKey || process.env.GEMINI_API_KEY;
-        const geminiModel = model.includes('1.5') ? 'gemini-1.5-pro' : 'gemini-2.0-flash';
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }]
-          })
-        });
-        const data = await res.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || JSON.stringify(data);
-        emit({ type: 'tool_end', toolName: `Cloud AI Dispatcher (${model})`, result: 'Success', durationMs: Date.now() - start });
-        emit({ type: 'token', token: text });
-        return;
-      }
+    const result = `DB: ${dbStatus ? 'Healthy' : 'Degraded'} | RSS: ${(mem.rss / 1024 / 1024).toFixed(1)}MB | Uptime: ${uptimeSec}s`;
 
-      // 2. OpenAI / ChatGPT
-      if (model.startsWith('gpt')) {
-        const apiKey = credentials.openaiKey || process.env.OPENAI_API_KEY;
-        const res = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o',
-            messages: [{ role: 'user', content: prompt }]
-          })
-        });
-        const data = await res.json();
-        const text = data.choices?.[0]?.message?.content || JSON.stringify(data);
-        emit({ type: 'tool_end', toolName: `Cloud AI Dispatcher (${model})`, result: 'Success', durationMs: Date.now() - start });
-        emit({ type: 'token', token: text });
-        return;
-      }
+    emit({
+      type: 'tool_log',
+      callId,
+      chunk: result
+    });
 
-      // 3. Anthropic Claude
-      if (model.startsWith('claude')) {
-        const apiKey = credentials.claudeKey || process.env.ANTHROPIC_API_KEY;
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01'
-          },
-          body: JSON.stringify({
-            model: 'claude-3-5-sonnet-20241022',
-            max_tokens: 4096,
-            messages: [{ role: 'user', content: prompt }]
-          })
-        });
-        const data = await res.json();
-        const text = data.content?.[0]?.text || JSON.stringify(data);
-        emit({ type: 'tool_end', toolName: `Cloud AI Dispatcher (${model})`, result: 'Success', durationMs: Date.now() - start });
-        emit({ type: 'token', token: text });
-        return;
-      }
-    } catch (err) {
-      emit({ type: 'tool_end', toolName: `Cloud AI Dispatcher (${model})`, result: `Error: ${err.message}`, durationMs: Date.now() - start });
-      emit({ type: 'token', token: `⚠️ **Provider Call Failed:** ${err.message}` });
-    }
+    emit({
+      type: 'tool_done',
+      callId,
+      result,
+      durationMs: Date.now() - start,
+      exitCode: 0
+    });
+
+    emit({
+      type: 'text_chunk',
+      token: `### System Status & Telemetry\n- **Host Platform:** \`${process.platform} (${process.arch})\`\n- **Node.js:** \`${process.version}\`\n- **Database:** SQLite WAL (\`${dbStatus ? 'Connected & Healthy' : 'Error'}\`)\n- **Memory Usage:** \`${(mem.rss / 1024 / 1024).toFixed(1)} MB RSS\`\n- **Process Uptime:** \`${uptimeSec} seconds\`\n- **Security Mode:** HttpOnly Session Auth + SSRF Guardrails Active`
+    });
+  }
+
+  async handleGeneralTask(prompt, emit, model) {
+    emit({
+      type: 'text_chunk',
+      token: `I am your **OMENA Autonomous DevOps Assistant** powered by **${model}**.\n\nI can execute terminal commands, automate live Chrome browsers with zero mock data, inspect workspace codebases, and run persistent multi-step engineering tasks.\n\n*How can I assist your workflow today?*`
+    });
   }
 }

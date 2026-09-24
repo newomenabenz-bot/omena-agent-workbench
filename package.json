@@ -5,9 +5,12 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node start_workbench.js",
-    "server": "node server.js",
-    "test": "node start_workbench.js --test"
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node test_endpoints.js",
+    "docker:build": "docker build -t omena-agent-workbench .",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
   },
   "keywords": [
     "ai-agent",

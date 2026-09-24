@@ -1,23 +1,29 @@
 /**
- * OMENA Mobile Agent Workbench & Agentic IDE - Production Server
- * Native Node.js HTTP & SSE Server on port 8080
+ * OMENA Mobile Agent Workbench & Agentic IDE - Enterprise Production Server
+ * Hardened with HttpOnly Session Auth, SSRF Guardrails, SQLite WAL, and Multi-Provider Adapters.
  */
 
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { WorkbenchDatabase } from './db.js';
+import { SecurityGuard } from './security.js';
 import { AgentEngine } from './agent_engine.js';
+import { adapterManager } from './providers/adapter_manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const WORKSPACE_ROOT = path.resolve(__dirname, '..', '..');
+const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || path.resolve(__dirname, '..', '..');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ARTIFACTS_DIR = path.join(WORKSPACE_ROOT, 'storage', 'artifacts');
 const UPLOADS_DIR = path.join(WORKSPACE_ROOT, 'storage', 'workbench_uploads');
 
-const PORT = 8080;
-const engine = new AgentEngine();
+const PORT = parseInt(process.env.PORT || '8080', 10);
+const HOST = process.env.HOST || '0.0.0.0';
+
+const db = new WorkbenchDatabase();
+const engine = new AgentEngine(db);
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=UTF-8',
@@ -28,17 +34,59 @@ const MIME_TYPES = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon'
+  '.ico': 'image/x-icon',
+  '.webp': 'image/webp'
 };
 
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > 10 * 1024 * 1024) { // 10MB limit
+        reject(new Error('Request body too large'));
+      }
+    });
+    req.on('end', () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch (e) {
+        reject(new Error('Invalid JSON'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function sendJson(res, statusCode, data, headers = {}) {
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    ...headers
+  });
+  res.end(JSON.stringify(data));
+}
+
+/**
+ * Authenticate incoming request via HttpOnly session cookie
+ */
+function checkAuth(req) {
+  const cookies = SecurityGuard.parseCookies(req.headers.cookie || '');
+  const token = cookies.omena_session;
+  if (!token) return null;
+  return db.validateAuthSession(token);
+}
+
 const server = http.createServer(async (req, res) => {
-  const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost:8080'}`);
+  const hostHeader = req.headers.host || `localhost:${PORT}`;
+  const parsedUrl = new URL(req.url, `http://${hostHeader}`);
   const pathname = parsedUrl.pathname;
 
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // CORS headers for local testing / cross-origin mobile clients
+  const origin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -46,16 +94,109 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // API Routes
-  if (pathname === '/api/chat' && req.method === 'POST') {
+  // --- Operational Endpoints (Public) ---
+  if (pathname === '/health' && req.method === 'GET') {
+    const isDbHealthy = db.healthCheck();
+    sendJson(res, isDbHealthy ? 200 : 503, {
+      status: isDbHealthy ? 'ok' : 'degraded',
+      uptime: process.uptime(),
+      db: isDbHealthy ? 'connected' : 'error',
+      memory: process.memoryUsage(),
+      timestamp: new Date().toISOString()
+    });
+    return;
+  }
+
+  if (pathname === '/ready' && req.method === 'GET') {
+    const isDbHealthy = db.healthCheck();
+    const portFile = 'C:\\Users\\Administrator\\AppData\\Local\\Google\\Chrome\\User Data\\DevToolsActivePort';
+    const chromeActive = fs.existsSync(portFile);
+    sendJson(res, 200, {
+      ready: true,
+      database: isDbHealthy,
+      browser: { active: chromeActive },
+      port: PORT,
+      timestamp: new Date().toISOString()
+    });
+    return;
+  }
+
+  // --- Capabilities Schema (Public) ---
+  if (pathname === '/api/models' && req.method === 'GET') {
+    sendJson(res, 200, {
+      models: adapterManager.listModels(),
+      default: 'gemini-2.0-flash'
+    });
+    return;
+  }
+
+  // --- Authentication Routes ---
+  if (pathname === '/api/auth/login' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const { password } = body;
+
+      if (!password || !SecurityGuard.verifyPassword(password)) {
+        sendJson(res, 401, { error: 'Invalid admin credentials' });
+        return;
+      }
+
+      const token = SecurityGuard.generateSessionToken();
+      db.createAuthSession(token, 'admin');
+
+      const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.socket.encrypted;
+      const cookieHeader = `omena_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800${isHttps ? '; Secure' : ''}`;
+
+      sendJson(res, 200, { ok: true, user: { role: 'admin' } }, {
+        'Set-Cookie': cookieHeader
+      });
+    } catch (err) {
+      sendJson(res, 400, { error: err.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/auth/logout' && req.method === 'POST') {
+    const cookies = SecurityGuard.parseCookies(req.headers.cookie || '');
+    if (cookies.omena_session) {
+      db.deleteAuthSession(cookies.omena_session);
+    }
+    sendJson(res, 200, { ok: true }, {
+      'Set-Cookie': 'omena_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'
+    });
+    return;
+  }
+
+  if (pathname === '/api/auth/me' && req.method === 'GET') {
+    const session = checkAuth(req);
+    sendJson(res, 200, {
+      authenticated: Boolean(session),
+      user: session ? { role: session.role } : null
+    });
+    return;
+  }
+
+  // --- Auth Boundary: Protected API Routes ---
+  const isProtectedApi = pathname.startsWith('/api/') && !pathname.startsWith('/api/auth/') && pathname !== '/api/models';
+  if (isProtectedApi) {
+    const authSession = checkAuth(req);
+    if (!authSession) {
+      sendJson(res, 401, {
+        error: 'Authentication required. Please authenticate via POST /api/auth/login.'
+      });
+      return;
+    }
+  }
+
+  // --- Protected: Streaming Chat / SSE (/api/chat and /api/stream) ---
+  if ((pathname === '/api/chat' || pathname === '/api/stream') && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', async () => {
       try {
-        const { prompt, model, credentials } = JSON.parse(body || '{}');
+        const { prompt, model, credentials, sessionId } = JSON.parse(body || '{}');
         if (!prompt) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Missing prompt' }));
+          sendJson(res, 400, { error: 'Missing prompt' });
           return;
         }
 
@@ -70,45 +211,67 @@ const server = http.createServer(async (req, res) => {
           res.write(`data: ${JSON.stringify(event)}\n\n`);
         };
 
-        await engine.processPromptStream(prompt, emit, { model, credentials });
+        await engine.processPromptStream(prompt, emit, {
+          model,
+          credentials,
+          sessionId: sessionId || 'default_session'
+        });
+
         res.write('data: [DONE]\n\n');
         res.end();
       } catch (err) {
         if (!res.headersSent) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: err.message }));
+          sendJson(res, 500, { error: err.message });
         }
       }
     });
     return;
   }
 
-  if (pathname === '/api/status' && req.method === 'GET') {
-    const portFile = 'C:\\Users\\Administrator\\AppData\\Local\\Google\\Chrome\\User Data\\DevToolsActivePort';
-    const chromeActive = fs.existsSync(portFile);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      ok: true,
-      agent: 'OMENA Autonomous Agent v2.0',
-      browserActive: chromeActive,
-      port: PORT,
-      timestamp: new Date().toISOString()
-    }));
+  // --- Protected: Sessions API ---
+  if (pathname === '/api/sessions' && req.method === 'GET') {
+    const sessions = db.getAllSessions();
+    sendJson(res, 200, { sessions });
     return;
   }
 
+  if (pathname.startsWith('/api/sessions/') && req.method === 'GET') {
+    const id = pathname.replace('/api/sessions/', '');
+    const session = db.getSession(id);
+    if (!session) {
+      sendJson(res, 404, { error: 'Session not found' });
+      return;
+    }
+    sendJson(res, 200, { session });
+    return;
+  }
+
+  if (pathname === '/api/sessions' && req.method === 'POST') {
+    try {
+      const { id, title, model } = await readJsonBody(req);
+      const sessId = id || `session_${Date.now()}`;
+      const session = db.createSession(sessId, title || 'New Conversation', model || 'gemini-2.0-flash');
+      sendJson(res, 200, { ok: true, session });
+    } catch (e) {
+      sendJson(res, 400, { error: e.message });
+    }
+    return;
+  }
+
+  if (pathname.startsWith('/api/sessions/') && req.method === 'DELETE') {
+    const id = pathname.replace('/api/sessions/', '');
+    db.deleteSession(id);
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  // --- Protected: Browser Artifacts ---
   if (pathname === '/api/browser/frame' && req.method === 'GET') {
-    const frameCandidates = [
-      path.join(ARTIFACTS_DIR, 'desktop_screen.png'),
-      path.join(ARTIFACTS_DIR, 'live_frame.jpg'),
-      path.join(ARTIFACTS_DIR, 'facebook_form_filled_live.png')
-    ];
-    for (const f of frameCandidates) {
-      if (fs.existsSync(f)) {
-        res.writeHead(200, { 'Content-Type': f.endsWith('.png') ? 'image/png' : 'image/jpeg' });
-        fs.createReadStream(f).pipe(res);
-        return;
-      }
+    const frameFile = path.join(ARTIFACTS_DIR, 'desktop_screen.png');
+    if (fs.existsSync(frameFile)) {
+      res.writeHead(200, { 'Content-Type': 'image/png' });
+      fs.createReadStream(frameFile).pipe(res);
+      return;
     }
     res.writeHead(404);
     res.end('No frame available');
@@ -127,20 +290,19 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // File Upload Endpoint
+  // --- Protected: File Upload ---
   if (pathname === '/api/upload' && req.method === 'POST') {
     const filename = `upload_${Date.now()}.bin`;
     const dest = path.join(UPLOADS_DIR, filename);
     const fileStream = fs.createWriteStream(dest);
     req.pipe(fileStream);
     fileStream.on('finish', () => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, filenames: [filename] }));
+      sendJson(res, 200, { ok: true, filename });
     });
     return;
   }
 
-  // Static File Serving
+  // --- Static Files ---
   let filePath = path.join(PUBLIC_DIR, pathname === '/' ? 'index.html' : pathname);
   if (!fs.existsSync(filePath)) {
     filePath = path.join(PUBLIC_DIR, 'index.html');
@@ -160,7 +322,31 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[OMENA Workbench] Server listening on http://0.0.0.0:${PORT}`);
-  console.log(`[OMENA Workbench] Local URL: http://localhost:${PORT}`);
+// Graceful Shutdown
+function handleShutdown(signal) {
+  console.log(`\n[OMENA Server] Received ${signal}. Starting graceful shutdown...`);
+  server.close(() => {
+    console.log('[OMENA Server] HTTP server closed.');
+    try {
+      db.close();
+      console.log('[OMENA Server] SQLite database connection closed.');
+    } catch {}
+    process.exit(0);
+  });
+
+  // Force close after 5s if hanging
+  setTimeout(() => {
+    console.error('[OMENA Server] Forceful shutdown timeout.');
+    process.exit(1);
+  }, 5000);
+}
+
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+process.on('SIGINT', () => handleShutdown('SIGINT'));
+
+server.listen(PORT, HOST, () => {
+  console.log(`[OMENA Workbench v2.0] Listening on http://${HOST}:${PORT}`);
+  console.log(`[OMENA Workbench v2.0] Local Address: http://localhost:${PORT}`);
+  console.log(`[OMENA Workbench v2.0] Database: SQLite WAL at storage/workbench.db`);
+  console.log(`[OMENA Workbench v2.0] Security: HttpOnly Session Cookies & SSRF Guardrails Enabled`);
 });

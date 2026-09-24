@@ -64,6 +64,7 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  height: 100dvh;
   max-width: 900px;
   margin: 0 auto;
   position: relative;
@@ -711,3 +712,127 @@ textarea#user-prompt::placeholder {
   font-size: 12px;
   color: var(--text-muted);
 }
+
+/* Auth Modal */
+#auth-modal .modal-card {
+  max-width: 380px;
+  text-align: center;
+  gap: 18px;
+}
+
+.auth-lock-icon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto;
+  color: var(--accent-color);
+  background: rgba(16, 185, 129, 0.1);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.auth-input:focus {
+  border-color: var(--accent-color);
+}
+
+.auth-submit-btn {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  border: none;
+  font-weight: 600;
+  font-size: 15px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.auth-submit-btn:active {
+  opacity: 0.85;
+}
+
+.auth-error {
+  color: #ef4444;
+  font-size: 13px;
+  display: none;
+}
+
+/* Structured Real-Time Tool Stream Accordion */
+.tool-accordion {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  margin: 8px 0;
+  overflow: hidden;
+  background-color: var(--bg-secondary);
+}
+
+.tool-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+}
+
+.tool-summary:hover {
+  color: var(--text-primary);
+}
+
+.tool-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: monospace;
+}
+
+.tool-badge-pill {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--border-subtle);
+  color: var(--text-muted);
+}
+
+.tool-badge-pill.success {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-color);
+}
+
+.tool-badge-pill.blocked {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.tool-log-body {
+  padding: 10px 12px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border-subtle);
+}
+
