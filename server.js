@@ -109,7 +109,11 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/ready' && req.method === 'GET') {
     const isDbHealthy = db.healthCheck();
-    const portFile = 'C:\\Users\\Administrator\\AppData\\Local\\Google\\Chrome\\User Data\\DevToolsActivePort';
+    const portFile = process.env.DEVTOOLS_PORT_FILE || (
+      process.platform === 'win32' && process.env.LOCALAPPDATA
+        ? path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'User Data', 'DevToolsActivePort')
+        : '/tmp/DevToolsActivePort'
+    );
     const chromeActive = fs.existsSync(portFile);
     sendJson(res, 200, {
       ready: true,

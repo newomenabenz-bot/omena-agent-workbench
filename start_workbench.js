@@ -13,7 +13,11 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const WORKSPACE_ROOT = path.resolve(__dirname, '..', '..');
-const CLOUDFLARED_EXE = 'C:\\Users\\Administrator\\.gemini\\antigravity\\bin\\cloudflared.exe';
+const CLOUDFLARED_EXE = process.env.CLOUDFLARED_PATH || (
+  process.platform === 'win32' && process.env.USERPROFILE
+    ? path.join(process.env.USERPROFILE, '.gemini', 'antigravity', 'bin', 'cloudflared.exe')
+    : 'cloudflared'
+);
 const URL_FILE = path.join(WORKSPACE_ROOT, 'storage', 'workbench_public_url.txt');
 const INFRA_FILE = path.join(WORKSPACE_ROOT, 'storage', 'memory', 'infrastructure_state.json');
 
