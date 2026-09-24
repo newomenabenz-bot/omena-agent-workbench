@@ -1,0 +1,25 @@
+{
+  "name": "omena-mobile-agent-workbench",
+  "version": "2.0.0",
+  "description": "Production-Grade Autonomous AI Agent Workbench & Agentic IDE with Minimalist Mobile Web UI",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node start_workbench.js",
+    "server": "node server.js",
+    "test": "node start_workbench.js --test"
+  },
+  "keywords": [
+    "ai-agent",
+    "agentic-ide",
+    "mobile-web-ui",
+    "autonomous-agent",
+    "chrome-devtools",
+    "gemini",
+    "chatgpt",
+    "claude",
+    "devops"
+  ],
+  "author": "OMENA Autonomous Systems",
+  "license": "MIT"
+}

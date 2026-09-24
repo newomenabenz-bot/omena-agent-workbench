@@ -1,0 +1,30 @@
+name: Autonomous Workbench CI/CD
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate Syntax & Static Assets
+        run: |
+          node -c server.js
+          node -c agent_engine.js
+          node -c start_workbench.js
+          test -f public/index.html
+          test -f public/style.css
+          test -f public/app.js
+          test -f public/manifest.json
+          echo "All workbench assets validated successfully!"
