@@ -39,6 +39,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
+# Create dedicated non-root user for isolated execution
+RUN groupadd -r appuser && useradd -r -g appuser -G audio,video appuser
+
 ENV NODE_ENV=production \
     PORT=8080 \
     HOST=0.0.0.0 \
@@ -56,8 +59,11 @@ COPY security.js ./
 COPY providers ./providers
 COPY public ./public
 
-# Setup persistent mount directories
-RUN mkdir -p /app/workspace /app/storage/artifacts /app/storage/memory /app/storage/workbench_uploads
+# Setup persistent mount directories and non-root ownership
+RUN mkdir -p /app/workspace /app/storage/artifacts /app/storage/memory /app/storage/workbench_uploads && \
+    chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8080
 

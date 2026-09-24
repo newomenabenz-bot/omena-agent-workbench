@@ -8,6 +8,7 @@ services:
     image: omena-agent-workbench:latest
     container_name: omena-agent-workbench
     restart: unless-stopped
+    shm_size: '2gb'
     ports:
       - "8080:8080"
     environment:

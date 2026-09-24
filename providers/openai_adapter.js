@@ -1,19 +1,48 @@
 /**
  * OpenAI / ChatGPT Provider Adapter
- * Supports gpt-4o, o3-mini
- * Declares capabilities: streaming: true, tools: true, vision: true, reasoning: true
+ * Supports gpt-4o (reasoning: false) and o3-mini (reasoning: true)
  */
 
 import { BaseProviderAdapter } from './base_adapter.js';
 
 export class OpenAIAdapter extends BaseProviderAdapter {
   constructor(modelId = 'gpt-4o') {
+    const isReasoningModel = modelId.startsWith('o1') || modelId.startsWith('o3');
     super(modelId, 'OpenAI ChatGPT', {
       streaming: true,
       tools: true,
-      vision: true,
-      reasoning: true
+      vision: !isReasoningModel,
+      reasoning: isReasoningModel // True only for dedicated reasoning token API (o1/o3)
     });
+  }
+
+  formatPayload({ prompt, messages = [], tools = [] }) {
+    const formattedMsgs = messages.length > 0 
+      ? messages.map(m => ({ role: m.role, content: m.content }))
+      : [{ role: 'user', content: prompt }];
+
+    const payload = {
+      model: this.id,
+      messages: formattedMsgs,
+      stream: true
+    };
+
+    if (this.capabilities.tools && tools && tools.length > 0) {
+      payload.tools = tools.map(t => ({
+        type: 'function',
+        function: {
+          name: t.name,
+          description: t.description || '',
+          parameters: t.parameters || { type: 'object', properties: {} }
+        }
+      }));
+    }
+
+    if (this.capabilities.reasoning) {
+      payload.reasoning_effort = 'medium';
+    }
+
+    return payload;
   }
 
   async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit }) {
@@ -22,9 +51,7 @@ export class OpenAIAdapter extends BaseProviderAdapter {
     if (apiKey) {
       try {
         const endpoint = `https://api.openai.com/v1/chat/completions`;
-        const formattedMsgs = messages.length > 0 
-          ? messages.map(m => ({ role: m.role, content: m.content }))
-          : [{ role: 'user', content: prompt }];
+        const payload = this.formatPayload({ prompt, messages, tools });
 
         const res = await fetch(endpoint, {
           method: 'POST',
@@ -32,11 +59,7 @@ export class OpenAIAdapter extends BaseProviderAdapter {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`
           },
-          body: JSON.stringify({
-            model: this.id,
-            messages: formattedMsgs,
-            stream: true
-          })
+          body: JSON.stringify(payload)
         });
 
         if (!res.ok) {

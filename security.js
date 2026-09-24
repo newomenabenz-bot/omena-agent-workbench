@@ -1,12 +1,14 @@
 /**
- * OMENA Enterprise Security & Guardrails Engine
+ * OMENA Enterprise Security & Guardrails Engine v3.0
  * - Constant-time password validation & HttpOnly session tokens
- * - Command execution boundaries & destructive command prevention
- * - SSRF protection for browser automation (blocks private IPs, loopback, metadata services)
+ * - Directory containment & path traversal / escape prevention
+ * - True SSRF Protection with DNS resolution & private IP detection
  */
 
 import crypto from 'crypto';
+import dns from 'node:dns/promises';
 import { URL } from 'url';
+import path from 'path';
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'omena2026';
 
@@ -24,6 +26,18 @@ const BLOCKED_COMMAND_PATTERNS = [
   /\breboot\b/i,
   /\b:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, // Fork bomb
   /\bdrop\s+database\b/i
+];
+
+// Sensitive system paths that should never be accessed
+const SENSITIVE_PATH_PATTERNS = [
+  /\/var\/run\/docker\.sock/i,
+  /\/etc\/shadow/i,
+  /\/etc\/passwd/i,
+  /\/proc\//i,
+  /\/sys\//i,
+  /\/root\b/i,
+  /[a-zA-Z]:\\windows\\system32/i,
+  /[a-zA-Z]:\\windows\\repair/i
 ];
 
 export class SecurityGuard {
@@ -60,14 +74,16 @@ export class SecurityGuard {
   }
 
   /**
-   * Command safety guardrail
+   * Command safety and directory containment guardrail
    */
-  static validateCommand(command) {
+  static validateCommand(command, workspaceRoot = '') {
     if (!command || typeof command !== 'string') {
       return { allowed: false, reason: 'Empty command' };
     }
 
     const trimmed = command.trim();
+
+    // 1. Check for blacklisted destructive operations
     for (const pattern of BLOCKED_COMMAND_PATTERNS) {
       if (pattern.test(trimmed)) {
         return {
@@ -77,11 +93,81 @@ export class SecurityGuard {
       }
     }
 
+    // 2. Check for directory traversal attempts (e.g., ../ or ..\)
+    if (/(?:^|\s|["'])(?:\.\.[\/\\]|\.\.$)/.test(trimmed) || trimmed.includes('../../')) {
+      return {
+        allowed: false,
+        reason: 'Path Escape Guardrail: Directory traversal (..) outside scoped workspace environment is prohibited.'
+      };
+    }
+
+    // 3. Check for unauthorized access to sensitive host/system paths
+    for (const pattern of SENSITIVE_PATH_PATTERNS) {
+      if (pattern.test(trimmed)) {
+        return {
+          allowed: false,
+          reason: `Path Escape Guardrail: Access to sensitive system path matching [${pattern.toString()}] is strictly prohibited.`
+        };
+      }
+    }
+
     return { allowed: true };
   }
 
   /**
-   * SSRF Protection: Validate target URL to prevent loopback/internal subnet traversal
+   * True SSRF Protection with DNS resolution
+   * Resolves domain to IP and checks against loopback, private subnets, and cloud metadata
+   */
+  static async validateUrlWithDns(rawUrl) {
+    let parsed;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      throw new Error(`Invalid URL format: "${rawUrl}"`);
+    }
+
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`Invalid protocol "${parsed.protocol}". Only HTTP and HTTPS are permitted.`);
+    }
+
+    const hostname = parsed.hostname.toLowerCase();
+
+    // Loopback hostnames
+    if (
+      hostname === 'localhost' ||
+      hostname.endsWith('.localhost') ||
+      hostname.endsWith('.local') ||
+      hostname.endsWith('.internal') ||
+      hostname.endsWith('.lan') ||
+      hostname === 'host.docker.internal' ||
+      hostname === 'metadata.google.internal'
+    ) {
+      throw new Error(`SSRF Guardrail: Access to internal host "${hostname}" is prohibited.`);
+    }
+
+    // If already an IP address, validate directly
+    if (this.isPrivateOrLoopbackIp(hostname)) {
+      throw new Error(`SSRF Guardrail: Access to private/loopback IP "${hostname}" is prohibited.`);
+    }
+
+    // Perform DNS lookup to prevent DNS rebinding
+    try {
+      const addresses = await dns.lookup(hostname, { all: true });
+      for (const item of addresses) {
+        if (this.isPrivateOrLoopbackIp(item.address)) {
+          throw new Error(`SSRF Guardrail: Host "${hostname}" resolves to private/prohibited IP ${item.address}. Request blocked.`);
+        }
+      }
+    } catch (err) {
+      if (err.message.includes('SSRF Guardrail')) throw err;
+      throw new Error(`DNS Resolution failed for "${hostname}": ${err.message}`);
+    }
+
+    return parsed.toString();
+  }
+
+  /**
+   * Synchronous basic URL validator (fallback for sync contexts)
    */
   static validateUrlForSSRF(rawUrl) {
     let parsed;
@@ -96,8 +182,6 @@ export class SecurityGuard {
     }
 
     const hostname = parsed.hostname.toLowerCase();
-
-    // Loopback names
     if (
       hostname === 'localhost' ||
       hostname.endsWith('.localhost') ||
@@ -110,7 +194,6 @@ export class SecurityGuard {
       throw new Error(`SSRF Guardrail: Access to internal host "${hostname}" is prohibited.`);
     }
 
-    // IP address checks
     if (this.isPrivateOrLoopbackIp(hostname)) {
       throw new Error(`SSRF Guardrail: Access to private/loopback IP "${hostname}" is prohibited.`);
     }
@@ -122,8 +205,12 @@ export class SecurityGuard {
    * Check if an IP address falls into private, loopback, or cloud metadata ranges
    */
   static isPrivateOrLoopbackIp(ip) {
-    // IPv6 loopback
-    if (ip === '::1' || ip === '0:0:0:0:0:0:0:1' || ip === '::') return true;
+    if (!ip) return true;
+    
+    // IPv6 loopback and private
+    if (ip === '::1' || ip === '0:0:0:0:0:0:0:1' || ip === '::' || ip.startsWith('fe80:') || ip.startsWith('fc00:') || ip.startsWith('fd00:')) {
+      return true;
+    }
 
     // IPv4 check
     const ipv4Match = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);

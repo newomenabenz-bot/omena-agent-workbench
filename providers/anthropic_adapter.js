@@ -1,7 +1,6 @@
 /**
  * Anthropic / Claude Provider Adapter
- * Supports claude-3-5-sonnet
- * Declares capabilities: streaming: true, tools: true, vision: true, reasoning: false
+ * Supports claude-3-5-sonnet (reasoning: false)
  */
 
 import { BaseProviderAdapter } from './base_adapter.js';
@@ -12,8 +11,31 @@ export class AnthropicAdapter extends BaseProviderAdapter {
       streaming: true,
       tools: true,
       vision: true,
-      reasoning: false
+      reasoning: false // Standard LLM, does not expose separate thinking budget token API
     });
+  }
+
+  formatPayload({ prompt, messages = [], tools = [] }) {
+    const formattedMsgs = messages.length > 0 
+      ? messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
+      : [{ role: 'user', content: prompt }];
+
+    const payload = {
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 4096,
+      messages: formattedMsgs,
+      stream: true
+    };
+
+    if (tools && tools.length > 0) {
+      payload.tools = tools.map(t => ({
+        name: t.name,
+        description: t.description || '',
+        input_schema: t.parameters || { type: 'object', properties: {} }
+      }));
+    }
+
+    return payload;
   }
 
   async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit }) {
@@ -22,9 +44,7 @@ export class AnthropicAdapter extends BaseProviderAdapter {
     if (apiKey) {
       try {
         const endpoint = `https://api.anthropic.com/v1/messages`;
-        const formattedMsgs = messages.length > 0 
-          ? messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
-          : [{ role: 'user', content: prompt }];
+        const payload = this.formatPayload({ prompt, messages, tools });
 
         const res = await fetch(endpoint, {
           method: 'POST',
@@ -33,12 +53,7 @@ export class AnthropicAdapter extends BaseProviderAdapter {
             'x-api-key': apiKey,
             'anthropic-version': '2023-06-01'
           },
-          body: JSON.stringify({
-            model: 'claude-3-5-sonnet-20241022',
-            max_tokens: 4096,
-            messages: formattedMsgs,
-            stream: true
-          })
+          body: JSON.stringify(payload)
         });
 
         if (!res.ok) {

@@ -1,18 +1,17 @@
 /**
- * Google Gemini Provider Adapter
- * Supports gemini-2.0-flash, gemini-1.5-pro
- * Declares capabilities: streaming: true, tools: true, vision: true, reasoning: false
+ * DeepSeek Provider Adapter
+ * Supports deepseek-r1 (reasoning: true)
  */
 
 import { BaseProviderAdapter } from './base_adapter.js';
 
-export class GeminiAdapter extends BaseProviderAdapter {
-  constructor(modelId = 'gemini-2.0-flash') {
-    super(modelId, 'Google Gemini', {
+export class DeepSeekAdapter extends BaseProviderAdapter {
+  constructor(modelId = 'deepseek-r1') {
+    super(modelId, 'DeepSeek AI', {
       streaming: true,
       tools: true,
-      vision: true,
-      reasoning: false // Standard multimodal, does not expose dedicated reasoning token API
+      vision: false,
+      reasoning: true // Exposes dedicated reasoning/thinking token stream
     });
   }
 
@@ -22,7 +21,7 @@ export class GeminiAdapter extends BaseProviderAdapter {
       : [{ role: 'user', content: prompt }];
 
     const payload = {
-      model: this.id,
+      model: 'deepseek-reasoner',
       messages: formattedMsgs,
       stream: true
     };
@@ -42,11 +41,11 @@ export class GeminiAdapter extends BaseProviderAdapter {
   }
 
   async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit }) {
-    const apiKey = credentials.geminiKey || process.env.GEMINI_API_KEY;
-    
+    const apiKey = credentials.deepseekKey || process.env.DEEPSEEK_API_KEY;
+
     if (apiKey) {
       try {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`;
+        const endpoint = `https://api.deepseek.com/chat/completions`;
         const payload = this.formatPayload({ prompt, messages, tools });
 
         const res = await fetch(endpoint, {
@@ -60,7 +59,7 @@ export class GeminiAdapter extends BaseProviderAdapter {
 
         if (!res.ok) {
           const errText = await res.text();
-          throw new Error(`Gemini API Error (${res.status}): ${errText}`);
+          throw new Error(`DeepSeek API Error (${res.status}): ${errText}`);
         }
 
         const reader = res.body.getReader();
@@ -81,6 +80,9 @@ export class GeminiAdapter extends BaseProviderAdapter {
             if (dataStr === '[DONE]') break;
             try {
               const parsed = JSON.parse(dataStr);
+              // Handle reasoning_content if present
+              const reasoning = parsed.choices?.[0]?.delta?.reasoning_content || '';
+              if (reasoning) emit({ type: 'text_chunk', token: `💭 *${reasoning}*` });
               const delta = parsed.choices?.[0]?.delta?.content || '';
               if (delta) emit({ type: 'text_chunk', token: delta });
             } catch {}
@@ -88,10 +90,10 @@ export class GeminiAdapter extends BaseProviderAdapter {
         }
         return;
       } catch (err) {
-        emit({ type: 'text_chunk', token: `⚠️ *Gemini Direct Stream Notice:* ${err.message}\nFalling back to local autonomous execution...\n\n` });
+        emit({ type: 'text_chunk', token: `⚠️ *DeepSeek Direct Stream Notice:* ${err.message}\n` });
       }
     }
 
-    emit({ type: 'text_chunk', token: `🧠 *Gemini Engine (${this.id})* processing request with autonomous tool capability...\n\n` });
+    emit({ type: 'text_chunk', token: `🧠 *DeepSeek Engine (${this.id})* processing reasoning request...\n\n` });
   }
 }

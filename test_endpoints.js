@@ -43,17 +43,12 @@ async function runTests() {
     if (!data.ready) throw new Error(`Not ready: ${JSON.stringify(data)}`);
   });
 
-  // 3. Models & Capabilities Schema
-  await assertTest('GET /api/models returns capability flags', async () => {
+  // 3. Unauthenticated Access Blocked (including /api/models)
+  await assertTest('Unauthenticated GET /api/models returns 401 Unauthorized', async () => {
     const res = await fetch(`${BASE_URL}/api/models`);
-    if (!res.ok) throw new Error(`Status ${res.status}`);
-    const data = await res.json();
-    if (!Array.isArray(data.models) || data.models.length === 0) throw new Error(`No models declared`);
-    const flash = data.models.find(m => m.id === 'gemini-2.0-flash');
-    if (!flash || !flash.tools || !flash.streaming) throw new Error(`Missing capabilities on gemini-2.0-flash`);
+    if (res.status !== 401) throw new Error(`Expected 401, got ${res.status}`);
   });
 
-  // 4. Unauthenticated Access Blocked
   await assertTest('Unauthenticated GET /api/sessions returns 401 Unauthorized', async () => {
     const res = await fetch(`${BASE_URL}/api/sessions`);
     if (res.status !== 401) throw new Error(`Expected 401, got ${res.status}`);
@@ -103,7 +98,21 @@ async function runTests() {
     if (!data.authenticated) throw new Error(`Not authenticated`);
   });
 
-  // 8. Authenticated Sessions API
+  // 8. Authenticated Capabilities Schema
+  await assertTest('GET /api/models with session cookie returns capability flags', async () => {
+    const res = await fetch(`${BASE_URL}/api/models`, {
+      headers: { 'Cookie': sessionCookie }
+    });
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data.models) || data.models.length === 0) throw new Error(`No models declared`);
+    const flash = data.models.find(m => m.id === 'gemini-2.0-flash');
+    if (!flash || flash.reasoning !== false) throw new Error(`Expected gemini-2.0-flash to have reasoning: false`);
+    const o3 = data.models.find(m => m.id === 'o3-mini');
+    if (!o3 || o3.reasoning !== true) throw new Error(`Expected o3-mini to have reasoning: true`);
+  });
+
+  // 9. Authenticated Sessions API
   await assertTest('GET /api/sessions with cookie returns persistent sessions from SQLite', async () => {
     const res = await fetch(`${BASE_URL}/api/sessions`, {
       headers: { 'Cookie': sessionCookie }
@@ -113,7 +122,7 @@ async function runTests() {
     if (!Array.isArray(data.sessions)) throw new Error(`Expected sessions array`);
   });
 
-  // 9. Command Execution via SSE Stream
+  // 10. Command Execution via SSE Stream
   await assertTest('POST /api/stream executes shell command with real-time SSE events', async () => {
     const testSessionId = `test_sess_${Date.now()}`;
     const res = await fetch(`${BASE_URL}/api/stream`, {
@@ -137,7 +146,7 @@ async function runTests() {
     }
   });
 
-  // 10. Security Guardrail: Dangerous Command Blocked
+  // 11. Security Guardrail: Dangerous Command Blocked
   await assertTest('Security Guardrail blocks dangerous command (rm -rf /)', async () => {
     const testSessionId = `test_guard_${Date.now()}`;
     const res = await fetch(`${BASE_URL}/api/stream`, {
@@ -159,8 +168,30 @@ async function runTests() {
     }
   });
 
-  // 11. Security Guardrail: SSRF Target Blocked
-  await assertTest('SSRF Guardrail blocks internal loopback URL navigation', async () => {
+  // 12. Security Guardrail: Path Traversal Blocked
+  await assertTest('Security Guardrail blocks directory escape (../../)', async () => {
+    const testSessionId = `test_path_${Date.now()}`;
+    const res = await fetch(`${BASE_URL}/api/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': sessionCookie
+      },
+      body: JSON.stringify({
+        prompt: 'run cat ../../secret.txt',
+        model: 'gemini-2.0-flash',
+        sessionId: testSessionId
+      })
+    });
+
+    const text = await res.text();
+    if (!text.includes('Path Escape Guardrail') && !text.includes('prohibited')) {
+      throw new Error(`Path escape was not blocked! Output: ${text.slice(0, 200)}`);
+    }
+  });
+
+  // 13. Security Guardrail: SSRF Target & DNS Rebinding Blocked
+  await assertTest('SSRF Guardrail blocks DNS rebinding domain (localtest.me)', async () => {
     const testSessionId = `test_ssrf_${Date.now()}`;
     const res = await fetch(`${BASE_URL}/api/stream`, {
       method: 'POST',
@@ -169,7 +200,7 @@ async function runTests() {
         'Cookie': sessionCookie
       },
       body: JSON.stringify({
-        prompt: 'navigate to http://127.0.0.1:8080 and inspect',
+        prompt: 'navigate to http://localtest.me:8080 and inspect',
         model: 'gemini-2.0-flash',
         sessionId: testSessionId
       })

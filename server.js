@@ -121,15 +121,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // --- Capabilities Schema (Public) ---
-  if (pathname === '/api/models' && req.method === 'GET') {
-    sendJson(res, 200, {
-      models: adapterManager.listModels(),
-      default: 'gemini-2.0-flash'
-    });
-    return;
-  }
-
   // --- Authentication Routes ---
   if (pathname === '/api/auth/login' && req.method === 'POST') {
     try {
@@ -177,7 +168,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // --- Auth Boundary: Protected API Routes ---
-  const isProtectedApi = pathname.startsWith('/api/') && !pathname.startsWith('/api/auth/') && pathname !== '/api/models';
+  const isProtectedApi = pathname.startsWith('/api/') && !pathname.startsWith('/api/auth/');
   if (isProtectedApi) {
     const authSession = checkAuth(req);
     if (!authSession) {
@@ -186,6 +177,15 @@ const server = http.createServer(async (req, res) => {
       });
       return;
     }
+  }
+
+  // --- Capabilities Schema (Protected) ---
+  if (pathname === '/api/models' && req.method === 'GET') {
+    sendJson(res, 200, {
+      models: adapterManager.listModels(),
+      default: 'gemini-2.0-flash'
+    });
+    return;
   }
 
   // --- Protected: Streaming Chat / SSE (/api/chat and /api/stream) ---
