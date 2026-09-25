@@ -41,6 +41,67 @@ export class GeminiAdapter extends BaseProviderAdapter {
     return payload;
   }
 
+  /**
+   * Validate Gemini API key against Google endpoint
+   */
+  async validateCredential(apiKey) {
+    if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+      return { valid: false, error: 'Gemini API key is required' };
+    }
+    const cleanKey = apiKey.trim();
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`, {
+        headers: { 'User-Agent': 'OMENA-Agent-Workbench/4.0.1' },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (res.ok) {
+        return { valid: true };
+      }
+      const data = await res.json().catch(() => ({}));
+      const msg = data.error?.message || `HTTP ${res.status}: Invalid Gemini API Key`;
+      return { valid: false, error: msg };
+    } catch (e) {
+      return { valid: false, error: `Network error connecting to Google Gemini: ${e.message}` };
+    }
+  }
+
+  /**
+   * Dynamically discover Gemini models available to this API key
+   */
+  async discoverModels(apiKey) {
+    const cleanKey = (apiKey || '').trim();
+    if (!cleanKey) return [];
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`, {
+        headers: { 'User-Agent': 'OMENA-Agent-Workbench/4.0.1' },
+        signal: AbortSignal.timeout(12000)
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      if (!data.models || !Array.isArray(data.models)) return [];
+
+      return data.models
+        .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+        .map(m => {
+          const cleanId = m.name.replace(/^models\//, '');
+          const isReasoning = cleanId.includes('thinking') || cleanId.includes('2.0-flash-thinking');
+          return {
+            id: cleanId,
+            name: m.displayName || cleanId,
+            provider: 'Google Gemini',
+            streaming: true,
+            tools: true,
+            vision: true,
+            reasoning: isReasoning,
+            contextWindow: m.inputTokenLimit || 1048576,
+            discovered: true
+          };
+        });
+    } catch {
+      return [];
+    }
+  }
+
   async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit }) {
     const apiKey = credentials.geminiKey || process.env.GEMINI_API_KEY;
     
@@ -88,10 +149,10 @@ export class GeminiAdapter extends BaseProviderAdapter {
         }
         return;
       } catch (err) {
-        emit({ type: 'text_chunk', token: `⚠️ *Gemini Direct Stream Notice:* ${err.message}\nFalling back to local autonomous execution...\n\n` });
+        emit({ type: 'text_chunk', token: `⚠️ *Gemini API Notice:* ${err.message}\nContinuing with autonomous local tool execution...\n\n` });
       }
+    } else {
+      emit({ type: 'text_chunk', token: `ℹ️ *Autonomous Local Execution:* Model "${this.id}" requested without configured Gemini API key. Executing via local tool loop...\n\n` });
     }
-
-    emit({ type: 'text_chunk', token: `🧠 *Gemini Engine (${this.id})* processing request with autonomous tool capability...\n\n` });
   }
 }

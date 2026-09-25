@@ -102,7 +102,7 @@
       </div>
 
       <!-- Messages Stream -->
-      <div class="messages-container" id="messages-container" style="display: none;"></div>
+      <div class="messages-container" id="messages-container"></div>
 
     </main>
 
@@ -174,7 +174,11 @@
       </div>
       <div class="sidebar-item" id="btn-open-terminal-view">
         <span>⚡</span>
-        <span>PowerShell Shell Console</span>
+        <span>Terminal Console (Shell)</span>
+      </div>
+      <div class="sidebar-item" id="btn-open-workspace-view">
+        <span>📁</span>
+        <span>Workspace Files Explorer</span>
       </div>
       <div class="sidebar-item" id="btn-open-memory-view">
         <span>🧠</span>
@@ -182,7 +186,7 @@
       </div>
 
       <div class="sidebar-section-title">Recent Conversations</div>
-      <div id="recent-sessions-list">
+      <div id="sessions-list">
         <div class="sidebar-item" style="color: var(--text-muted); font-size: 13px;">No archived sessions</div>
       </div>
     </aside>
@@ -196,16 +200,16 @@
         <button class="icon-btn" id="btn-close-bottom-sheet">✕</button>
       </div>
       <div class="bottom-sheet-content" id="bottom-sheet-body">
-        <img class="bottom-sheet-img" id="bottom-sheet-img" src="/api/browser/frame" alt="Live View">
+        <img class="bottom-sheet-img" id="bottom-sheet-img" alt="Live View">
       </div>
     </div>
 
     <!-- Settings Modal -->
     <div class="modal-overlay" id="settings-modal">
       <div class="modal-card">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div class="modal-header-sticky">
           <h2 class="modal-title">Workbench Settings</h2>
-          <button class="icon-btn" id="btn-close-settings">✕</button>
+          <button class="icon-btn" id="btn-close-settings" title="Close Settings">✕</button>
         </div>
 
         <div class="setting-row">
@@ -240,30 +244,53 @@
 
         <!-- Google Gemini Subscription -->
         <div style="display:flex; flex-direction:column; gap:4px; padding: 6px 0;">
-          <div class="setting-label">Google Gemini / Advanced Subscription</div>
-          <input type="password" id="input-gemini-key" placeholder="Enter Gemini API Key or OAuth Token..." style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="setting-label">Google Gemini API Key</div>
+            <span id="status-gemini" class="provider-status-badge">Not configured</span>
+          </div>
+          <input type="password" id="input-gemini-key" placeholder="AIzaSy... (leave blank to keep current)" style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
         </div>
 
         <!-- ChatGPT / OpenAI Subscription -->
         <div style="display:flex; flex-direction:column; gap:4px; padding: 6px 0;">
-          <div class="setting-label">ChatGPT Plus / OpenAI Subscription</div>
-          <input type="password" id="input-openai-key" placeholder="Enter OpenAI Key or ChatGPT Session Token..." style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="setting-label">ChatGPT / OpenAI API Key</div>
+            <span id="status-openai" class="provider-status-badge">Not configured</span>
+          </div>
+          <input type="password" id="input-openai-key" placeholder="sk-proj-... (leave blank to keep current)" style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
         </div>
 
         <!-- Anthropic Claude Subscription -->
         <div style="display:flex; flex-direction:column; gap:4px; padding: 6px 0;">
-          <div class="setting-label">Anthropic Claude Key</div>
-          <input type="password" id="input-claude-key" placeholder="Enter Anthropic API Key (sk-ant-...)..." style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="setting-label">Anthropic Claude Key</div>
+            <span id="status-claude" class="provider-status-badge">Not configured</span>
+          </div>
+          <input type="password" id="input-claude-key" placeholder="sk-ant-... (leave blank to keep current)" style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
+        </div>
+
+        <!-- DeepSeek Subscription -->
+        <div style="display:flex; flex-direction:column; gap:4px; padding: 6px 0;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="setting-label">DeepSeek AI Key</div>
+            <span id="status-deepseek" class="provider-status-badge">Not configured</span>
+          </div>
+          <input type="password" id="input-deepseek-key" placeholder="sk-... (leave blank to keep current)" style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
         </div>
 
         <!-- Local Endpoint -->
         <div style="display:flex; flex-direction:column; gap:4px; padding: 6px 0;">
-          <div class="setting-label">Local Ollama / llama.cpp Endpoint</div>
-          <input type="text" id="input-local-endpoint" value="http://localhost:11434" style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="setting-label">Local Ollama / llama.cpp Endpoint</div>
+            <span id="status-local" class="provider-status-badge">Not configured</span>
+          </div>
+          <input type="text" id="input-local-endpoint" placeholder="http://host.docker.internal:11434" style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
         </div>
 
+        <div id="save-status-msg" style="font-size: 12px; padding: 4px 0; display: none;"></div>
+
         <div style="display:flex; justify-content: flex-end; margin-top: 6px;">
-          <button id="btn-save-keys" class="pill-badge" style="background: var(--text-primary); color: var(--bg-primary); border: none; padding: 8px 16px; font-weight: 600;">Save Subscriptions</button>
+          <button id="btn-save-keys" class="pill-badge" style="background: var(--text-primary); color: var(--bg-primary); border: none; padding: 8px 16px; font-weight: 600; cursor: pointer;">Save & Validate Subscriptions</button>
         </div>
 
         <div style="font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-top: 10px;">
@@ -283,13 +310,13 @@
             <div class="setting-label">Chrome DevTools Port</div>
             <div class="setting-desc">CDP remote port connected to real Chrome</div>
           </div>
-          <div style="font-family: monospace; font-size: 13px; color: var(--accent-color);">127.0.0.1:9222</div>
+          <div id="settings-cdp-status" style="font-family: monospace; font-size: 13px; color: var(--accent-color);">127.0.0.1:9222 (Checking...)</div>
         </div>
 
         <div class="setting-row">
           <div>
             <div class="setting-label">System Memory Tier</div>
-            <div class="setting-desc">Multi-tier persistent state synced</div>
+            <div class="setting-desc">Multi-tier persistent SQLite WAL database</div>
           </div>
           <div style="font-family: monospace; font-size: 13px; color: var(--text-secondary);">storage/workbench.db</div>
         </div>
@@ -300,6 +327,61 @@
             <div class="setting-desc">HttpOnly secure cookie active</div>
           </div>
           <button id="btn-logout" class="pill-badge" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 6px 12px; cursor: pointer;">Sign Out</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Terminal Console Modal -->
+    <div class="modal-overlay" id="terminal-modal">
+      <div class="modal-card" style="max-width: 700px; height: 80vh; max-height: 80dvh;">
+        <div class="modal-header-sticky">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: var(--accent-color);">⚡</span>
+            <h2 class="modal-title">Terminal Console (Shell)</h2>
+          </div>
+          <button class="icon-btn" id="btn-close-terminal">✕</button>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden; gap: 10px;">
+          <pre id="terminal-output" class="terminal-view"></pre>
+          <div class="terminal-input-row">
+            <span class="terminal-prompt">$</span>
+            <input type="text" id="terminal-cmd-input" placeholder="Type shell command (e.g. ls -la, uname -a, node -v)...">
+            <button id="btn-run-cmd" class="pill-badge" style="background: var(--accent-color); color: #000; border: none; font-weight: 600; cursor: pointer;">Run</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Workspace Files Modal -->
+    <div class="modal-overlay" id="workspace-modal">
+      <div class="modal-card" style="max-width: 700px; height: 80vh; max-height: 80dvh;">
+        <div class="modal-header-sticky">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span>📁</span>
+            <h2 class="modal-title">Workspace Files Explorer</h2>
+          </div>
+          <button class="icon-btn" id="btn-close-workspace">✕</button>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden; gap: 10px;">
+          <div id="workspace-tree-container" class="workspace-tree-view"></div>
+          <pre id="workspace-file-preview" class="workspace-preview" style="display: none;"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Memory State Modal -->
+    <div class="modal-overlay" id="memory-modal">
+      <div class="modal-card" style="max-width: 700px; height: 80vh; max-height: 80dvh;">
+        <div class="modal-header-sticky">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span>🧠</span>
+            <h2 class="modal-title">Memory & State Sync</h2>
+          </div>
+          <button class="icon-btn" id="btn-close-memory">✕</button>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden; gap: 10px;">
+          <div id="memory-tabs" style="display: flex; gap: 6px; flex-wrap: wrap;"></div>
+          <pre id="memory-json-view" class="memory-view"></pre>
         </div>
       </div>
     </div>

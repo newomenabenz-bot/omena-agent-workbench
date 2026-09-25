@@ -251,6 +251,76 @@ export class WorkbenchDatabase {
     stmt.run(key, typeof value === 'object' ? JSON.stringify(value) : String(value), Date.now());
   }
 
+  // --- Provider Credentials & Status Methods ---
+  saveProviderCredentials(newCreds = {}) {
+    const existing = this.getProviderCredentials(false);
+    const merged = { ...existing };
+
+    for (const [k, v] of Object.entries(newCreds)) {
+      if (typeof v === 'string') {
+        const trimmed = v.trim();
+        if (trimmed.length > 0) {
+          merged[k] = trimmed;
+        } else if (v === '') {
+          delete merged[k];
+        }
+      }
+    }
+
+    this.setSetting('provider_credentials', merged);
+    return merged;
+  }
+
+  getProviderCredentials(includeEnv = true) {
+    const stored = this.getSetting('provider_credentials', null);
+    let creds = {};
+    if (stored) {
+      try {
+        creds = typeof stored === 'string' ? JSON.parse(stored) : stored;
+      } catch {
+        creds = {};
+      }
+    }
+
+    if (includeEnv) {
+      if (!creds.gemini && process.env.GEMINI_API_KEY) creds.gemini = process.env.GEMINI_API_KEY;
+      if (!creds.openai && process.env.OPENAI_API_KEY) creds.openai = process.env.OPENAI_API_KEY;
+      if (!creds.anthropic && process.env.ANTHROPIC_API_KEY) creds.anthropic = process.env.ANTHROPIC_API_KEY;
+      if (!creds.deepseek && process.env.DEEPSEEK_API_KEY) creds.deepseek = process.env.DEEPSEEK_API_KEY;
+      if (!creds.local && process.env.LOCAL_AI_URL) creds.local = process.env.LOCAL_AI_URL;
+    }
+
+    return creds;
+  }
+
+  getMaskedProviderStatus() {
+    const creds = this.getProviderCredentials(true);
+    const providers = ['gemini', 'openai', 'anthropic', 'deepseek', 'local'];
+    const status = {};
+
+    for (const p of providers) {
+      const val = creds[p] || creds[`${p}Key`];
+      if (val && typeof val === 'string' && val.trim().length > 0) {
+        const clean = val.trim();
+        const masked = clean.length > 8 
+          ? `${clean.slice(0, 4)}...${clean.slice(-4)}` 
+          : '••••••••';
+        status[p] = {
+          configured: true,
+          maskedKey: p === 'local' ? clean : masked,
+          source: (this.getProviderCredentials(false)[p] ? 'database' : 'environment')
+        };
+      } else {
+        status[p] = {
+          configured: false,
+          maskedKey: null,
+          source: null
+        };
+      }
+    }
+    return status;
+  }
+
   // --- Health Check ---
   healthCheck() {
     try {

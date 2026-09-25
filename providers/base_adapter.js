@@ -24,6 +24,24 @@ export class BaseProviderAdapter {
   }
 
   /**
+   * Validate provider credentials against upstream API
+   * @param {Object|string} credential
+   * @returns {Promise<{ valid: boolean, error?: string }>}
+   */
+  async validateCredential(credential) {
+    return { valid: false, error: `Credential validation not supported for ${this.name}` };
+  }
+
+  /**
+   * Dynamically discover models available to this credential
+   * @param {Object|string} credential
+   * @returns {Promise<Array<Object>>}
+   */
+  async discoverModels(credential) {
+    return [];
+  }
+
+  /**
    * Execute chat generation with streaming tokens and tool calls
    * @param {Object} params - { messages, prompt, tools, credentials, emit }
    */

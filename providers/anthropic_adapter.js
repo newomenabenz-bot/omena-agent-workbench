@@ -15,13 +15,92 @@ export class AnthropicAdapter extends BaseProviderAdapter {
     });
   }
 
+  async validateCredential(credential) {
+    const key = credential?.claudeKey || credential?.apiKey || (typeof credential === 'string' ? credential : null) || process.env.ANTHROPIC_API_KEY;
+    if (!key || typeof key !== 'string' || key.trim().length === 0) {
+      return { valid: false, error: 'No Anthropic API key provided.' };
+    }
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/models?limit=5', {
+        headers: {
+          'x-api-key': key.trim(),
+          'anthropic-version': '2023-06-01'
+        }
+      });
+      if (res.ok) {
+        return { valid: true };
+      }
+      const data = await res.json().catch(() => ({}));
+      const msg = data.error?.message || `HTTP ${res.status}: ${res.statusText}`;
+      return { valid: false, error: `Anthropic validation failed: ${msg}` };
+    } catch (err) {
+      return { valid: false, error: `Anthropic validation error: ${err.message}` };
+    }
+  }
+
+  async discoverModels(credential) {
+    const key = credential?.claudeKey || credential?.apiKey || (typeof credential === 'string' ? credential : null) || process.env.ANTHROPIC_API_KEY;
+    const staticFallback = [
+      {
+        id: 'claude-3-5-sonnet',
+        name: 'Claude 3.5 Sonnet (Latest)',
+        provider: 'Anthropic Claude',
+        contextWindow: 200000,
+        streaming: true,
+        tools: true,
+        vision: true,
+        reasoning: false
+      },
+      {
+        id: 'claude-3-5-haiku',
+        name: 'Claude 3.5 Haiku',
+        provider: 'Anthropic Claude',
+        contextWindow: 200000,
+        streaming: true,
+        tools: true,
+        vision: false,
+        reasoning: false
+      }
+    ];
+
+    if (!key) return staticFallback;
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/models?limit=50', {
+        headers: {
+          'x-api-key': key.trim(),
+          'anthropic-version': '2023-06-01'
+        }
+      });
+      if (!res.ok) return staticFallback;
+      const data = await res.json();
+      if (!data.data || !Array.isArray(data.data)) return staticFallback;
+
+      const discovered = data.data.map(m => ({
+        id: m.id,
+        name: m.display_name || m.id,
+        provider: 'Anthropic Claude',
+        contextWindow: 200000,
+        streaming: true,
+        tools: true,
+        vision: m.id.includes('sonnet') || m.id.includes('opus'),
+        reasoning: false
+      }));
+
+      return discovered.length > 0 ? discovered : staticFallback;
+    } catch {
+      return staticFallback;
+    }
+  }
+
   formatPayload({ prompt, messages = [], tools = [] }) {
     const formattedMsgs = messages.length > 0 
       ? messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
       : [{ role: 'user', content: prompt }];
 
     const payload = {
-      model: 'claude-3-5-sonnet-20241022',
+      model: this.id || 'claude-3-5-sonnet-20241022',
       max_tokens: 4096,
       messages: formattedMsgs,
       stream: true
@@ -39,7 +118,7 @@ export class AnthropicAdapter extends BaseProviderAdapter {
   }
 
   async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit }) {
-    const apiKey = credentials.claudeKey || process.env.ANTHROPIC_API_KEY;
+    const apiKey = credentials.claudeKey || credentials.apiKey || process.env.ANTHROPIC_API_KEY;
 
     if (apiKey) {
       try {
@@ -50,7 +129,7 @@ export class AnthropicAdapter extends BaseProviderAdapter {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey,
+            'x-api-key': apiKey.trim(),
             'anthropic-version': '2023-06-01'
           },
           body: JSON.stringify(payload)

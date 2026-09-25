@@ -41,6 +41,10 @@
   --send-btn-text: #ffffff;
 }
 
+.hidden {
+  display: none !important;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -200,22 +204,26 @@ main {
   padding-bottom: 24px;
 }
 
-.message-wrapper {
+.message-wrapper,
+.message-row {
   display: flex;
   flex-direction: column;
   gap: 6px;
   max-width: 100%;
 }
 
-.message-wrapper.user {
+.message-wrapper.user,
+.message-row.user {
   align-items: flex-end;
 }
 
-.message-wrapper.assistant {
+.message-wrapper.assistant,
+.message-row.assistant {
   align-items: flex-start;
 }
 
-.message-bubble {
+.message-bubble,
+.user-bubble {
   border-radius: 18px;
   padding: 12px 18px;
   font-size: 15px;
@@ -223,14 +231,16 @@ main {
   word-break: break-word;
 }
 
-.message-wrapper.user .message-bubble {
+.message-wrapper.user .message-bubble,
+.message-row.user .user-bubble {
   background-color: var(--user-bubble-bg);
   color: var(--text-primary);
   border-bottom-right-radius: 4px;
   max-width: 85%;
 }
 
-.message-wrapper.assistant .message-bubble {
+.message-wrapper.assistant .message-bubble,
+.message-row.assistant .assistant-bubble {
   background-color: transparent;
   color: var(--text-primary);
   padding: 0 4px;
@@ -653,7 +663,7 @@ textarea#user-prompt::placeholder {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
-/* Settings Modal */
+/* Settings & Feature Modals */
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -670,6 +680,7 @@ textarea#user-prompt::placeholder {
   pointer-events: none;
   transition: opacity 0.2s ease;
   padding: 16px;
+  overflow-y: auto;
 }
 
 .modal-overlay.open {
@@ -688,11 +699,152 @@ textarea#user-prompt::placeholder {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  max-height: 85vh;
+  max-height: 85dvh;
+  overflow-y: auto;
+  position: relative;
+}
+
+.modal-header-sticky {
+  position: sticky;
+  top: -20px;
+  background-color: var(--bg-secondary);
+  z-index: 10;
+  margin: -20px -20px 0 -20px;
+  padding: 16px 20px 12px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  border-top-left-radius: 18px;
+  border-top-right-radius: 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .modal-title {
   font-size: 18px;
   font-weight: 700;
+}
+
+.provider-status-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+}
+
+.provider-status-badge.valid {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: var(--accent-color);
+}
+
+.provider-status-badge.invalid {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #ef4444;
+}
+
+/* Terminal View */
+.terminal-view {
+  flex: 1;
+  background-color: #05070a;
+  color: #38bdf8;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  min-height: 250px;
+}
+
+.terminal-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 6px 12px;
+}
+
+.terminal-prompt {
+  color: var(--accent-color);
+  font-family: monospace;
+  font-weight: 700;
+}
+
+.terminal-input-row input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-family: monospace;
+  font-size: 13px;
+  outline: none;
+}
+
+/* Workspace Tree & Memory Views */
+.workspace-tree-view {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
+  overflow-y: auto;
+  font-size: 13px;
+  font-family: monospace;
+  min-height: 200px;
+}
+
+.workspace-preview {
+  flex: 1;
+  background: #05070a;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
+  overflow-y: auto;
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  min-height: 150px;
+}
+
+.memory-view {
+  flex: 1;
+  background: #05070a;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
+  overflow-y: auto;
+  font-size: 12px;
+  font-family: monospace;
+  color: #34d399;
+  white-space: pre-wrap;
+  min-height: 250px;
+}
+
+.memory-tab-btn {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.memory-tab-btn.active {
+  background: var(--accent-color);
+  color: #000;
+  font-weight: 600;
 }
 
 .setting-row {

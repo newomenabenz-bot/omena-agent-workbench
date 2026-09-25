@@ -1,6 +1,6 @@
 {
   "name": "omena-mobile-agent-workbench",
-  "version": "2.0.0",
+  "version": "4.0.1",
   "description": "Production-Grade Autonomous AI Agent Workbench & Agentic IDE with Minimalist Mobile Web UI",
   "main": "server.js",
   "type": "module",

@@ -212,6 +212,102 @@ async function runTests() {
     }
   });
 
+  // 14. Providers Status API
+  await assertTest('GET /api/providers/status returns masked status', async () => {
+    const res = await fetch(`${BASE_URL}/api/providers/status`, {
+      headers: { 'Cookie': sessionCookie }
+    });
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+    const data = await res.json();
+    if (!data.providers || typeof data.providers !== 'object') throw new Error(`Expected providers object`);
+    if (!('gemini' in data.providers) || !('openai' in data.providers)) throw new Error(`Missing provider fields`);
+  });
+
+  // 15. Providers Config API (Persistence in SQLite without network test)
+  await assertTest('POST /api/providers/config saves credentials to SQLite database', async () => {
+    const res = await fetch(`${BASE_URL}/api/providers/config`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': sessionCookie
+      },
+      body: JSON.stringify({
+        credentials: {
+          local: 'http://localhost:11434'
+        },
+        testConnection: false
+      })
+    });
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(`Expected success: true, got ${JSON.stringify(data)}`);
+    if (!data.status || !data.status.local.configured) throw new Error(`Local provider not reported as configured`);
+  });
+
+  // 16. System Status Telemetry
+  await assertTest('GET /api/system/status returns truthfulness telemetry (CDP, model, ctx)', async () => {
+    const res = await fetch(`${BASE_URL}/api/system/status?model=gemini-2.0-flash`, {
+      headers: { 'Cookie': sessionCookie }
+    });
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+    const data = await res.json();
+    if (data.status !== 'online') throw new Error(`Expected status: online`);
+    if (!data.cdp || typeof data.cdp.active !== 'boolean') throw new Error(`Expected cdp.active boolean`);
+    if (!data.activeModel || data.activeModel.id !== 'gemini-2.0-flash') throw new Error(`Expected activeModel gemini-2.0-flash`);
+    if (typeof data.activeModel.contextWindow !== 'number') throw new Error(`Expected numeric contextWindow`);
+  });
+
+  // 17. Terminal Command Runner
+  await assertTest('POST /api/terminal/exec executes shell command and returns output', async () => {
+    const res = await fetch(`${BASE_URL}/api/terminal/exec`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': sessionCookie
+      },
+      body: JSON.stringify({
+        command: process.platform === 'win32' ? 'echo OMENA_TERMINAL_TEST' : 'echo OMENA_TERMINAL_TEST'
+      })
+    });
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+    const data = await res.json();
+    if (!data.stdout || !data.stdout.includes('OMENA_TERMINAL_TEST')) {
+      throw new Error(`Output missing test token: ${JSON.stringify(data)}`);
+    }
+  });
+
+  // 18. Workspace Tree API
+  await assertTest('GET /api/workspace/tree returns files list', async () => {
+    const res = await fetch(`${BASE_URL}/api/workspace/tree`, {
+      headers: { 'Cookie': sessionCookie }
+    });
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+    const data = await res.json();
+    if (!data.tree || !Array.isArray(data.tree)) throw new Error(`Expected tree array`);
+  });
+
+  // 19. Memory Store Viewer
+  await assertTest('GET /api/memory/view returns memory files', async () => {
+    const res = await fetch(`${BASE_URL}/api/memory/view`, {
+      headers: { 'Cookie': sessionCookie }
+    });
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+    const data = await res.json();
+    if (!data.memory || typeof data.memory !== 'object') throw new Error(`Expected memory object`);
+  });
+
+  // 20. Clean Browser Frame Standby SVG Placeholder (No 404 console errors)
+  await assertTest('GET /api/browser/frame returns 200 with SVG placeholder when no screenshot exists', async () => {
+    const res = await fetch(`${BASE_URL}/api/browser/frame`, {
+      headers: { 'Cookie': sessionCookie }
+    });
+    if (res.status !== 200) throw new Error(`Expected status 200, got ${res.status}`);
+    const contentType = res.headers.get('content-type');
+    if (!contentType || (!contentType.includes('image/svg+xml') && !contentType.includes('image/png'))) {
+      throw new Error(`Expected image content-type, got ${contentType}`);
+    }
+  });
+
   console.log(`\n======================================================`);
   console.log(`📊 Test Summary: ${passed} passed, ${failed} failed`);
   console.log(`======================================================\n`);

@@ -28,6 +28,11 @@ export class AgentOrchestrator {
       credentials = {}
     } = taskOptions;
 
+    const effectiveCreds = {
+      ...this.db.getProviderCredentials(true),
+      ...credentials
+    };
+
     this.activeRuns.set(runId, { cancelled: false });
 
     // Dual-format event dispatcher for both v4.0 standard and UI backward compatibility
@@ -113,7 +118,7 @@ export class AgentOrchestrator {
         assistantText = await this.executeAutonomousDevTask(prompt, dispatch, { recordedTools, recordedArtifacts });
       } else {
         // Standard Tool & LLM Orchestration Loop
-        assistantText = await this.executeStandardOrchestrationLoop(prompt, model, credentials, dispatch, { recordedTools, recordedArtifacts });
+        assistantText = await this.executeStandardOrchestrationLoop(prompt, model, effectiveCreds, dispatch, { recordedTools, recordedArtifacts });
       }
 
       dispatch({

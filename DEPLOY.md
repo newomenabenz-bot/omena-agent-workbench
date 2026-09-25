@@ -213,10 +213,22 @@ docker exec omena-agent-workbench sqlite3 /app/storage/workbench.db ".backup '/a
 sudo tar -czf /opt/omena/backups/omena-backup-$(date +%F).tar.gz /opt/omena/storage /opt/omena/workspace
 ```
 
-### Application Updates:
+### Application Updates (v4.0.1 Stabilization):
 ```bash
 cd /opt/omena/app
-git pull origin main
+git fetch origin main
+git checkout v4.0.1
 docker compose up -d --build
 ```
 The persistent database at `/opt/omena/storage/workbench.db` and files in `/opt/omena/workspace` remain 100% intact across updates.
+
+---
+
+## 7. Cloud Security Group & Firewall Hardening
+
+* **Ingress Boundary:** In AWS / Cloud Security Groups, do **NOT** leave port `8080` open to `0.0.0.0/0`.
+* **Recommended Architecture:**
+  1. Bind port 8080 to localhost inside `docker-compose.yml` (`127.0.0.1:8080:8080`).
+  2. Route public HTTPS traffic through Nginx reverse proxy (port 443) or an authenticated Cloudflare Tunnel.
+  3. If accessing port 8080 directly during initial deployment, restrict the AWS Security Group inbound rule to your specific administrator IP CIDR (`<YOUR_IP>/32`).
+* **Credential Protection:** Never check `.env` files into source control. Provider API keys are persisted safely inside the internal SQLite WAL database via encrypted server-authoritative endpoints.

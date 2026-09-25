@@ -45,6 +45,72 @@ export class OpenAIAdapter extends BaseProviderAdapter {
     return payload;
   }
 
+  /**
+   * Validate OpenAI API key
+   */
+  async validateCredential(apiKey) {
+    if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+      return { valid: false, error: 'OpenAI API key is required' };
+    }
+    const cleanKey = apiKey.trim();
+    try {
+      const res = await fetch(`https://api.openai.com/v1/models`, {
+        headers: {
+          'Authorization': `Bearer ${cleanKey}`,
+          'User-Agent': 'OMENA-Agent-Workbench/4.0.1'
+        },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (res.ok) {
+        return { valid: true };
+      }
+      const data = await res.json().catch(() => ({}));
+      return { valid: false, error: data.error?.message || `HTTP ${res.status}: Invalid OpenAI API Key` };
+    } catch (e) {
+      return { valid: false, error: `Network error connecting to OpenAI: ${e.message}` };
+    }
+  }
+
+  /**
+   * Dynamically discover OpenAI models available to this credential
+   */
+  async discoverModels(apiKey) {
+    const cleanKey = (apiKey || '').trim();
+    if (!cleanKey) return [];
+    try {
+      const res = await fetch(`https://api.openai.com/v1/models`, {
+        headers: {
+          'Authorization': `Bearer ${cleanKey}`,
+          'User-Agent': 'OMENA-Agent-Workbench/4.0.1'
+        },
+        signal: AbortSignal.timeout(12000)
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      if (!data.data || !Array.isArray(data.data)) return [];
+
+      const relevant = ['gpt-4o', 'gpt-4o-mini', 'o1', 'o1-mini', 'o3-mini', 'gpt-4-turbo'];
+      return data.data
+        .filter(m => relevant.includes(m.id) || m.id.startsWith('gpt-4o') || m.id.startsWith('o3'))
+        .map(m => {
+          const isReasoning = m.id.startsWith('o1') || m.id.startsWith('o3');
+          return {
+            id: m.id,
+            name: `OpenAI ${m.id}`,
+            provider: 'OpenAI ChatGPT',
+            streaming: true,
+            tools: true,
+            vision: !isReasoning,
+            reasoning: isReasoning,
+            contextWindow: 128000,
+            discovered: true
+          };
+        });
+    } catch {
+      return [];
+    }
+  }
+
   async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit }) {
     const apiKey = credentials.openaiKey || process.env.OPENAI_API_KEY;
 
@@ -92,10 +158,10 @@ export class OpenAIAdapter extends BaseProviderAdapter {
         }
         return;
       } catch (err) {
-        emit({ type: 'text_chunk', token: `⚠️ *OpenAI Direct Stream Notice:* ${err.message}\n` });
+        emit({ type: 'text_chunk', token: `⚠️ *OpenAI API Notice:* ${err.message}\nContinuing with autonomous local tool execution...\n\n` });
       }
+    } else {
+      emit({ type: 'text_chunk', token: `ℹ️ *Autonomous Local Execution:* Model "${this.id}" requested without configured OpenAI API key. Executing via local tool loop...\n\n` });
     }
-
-    emit({ type: 'text_chunk', token: `🧠 *OpenAI Engine (${this.id})* processing request...\n\n` });
   }
 }

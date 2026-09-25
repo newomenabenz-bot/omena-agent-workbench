@@ -25,6 +25,18 @@ const HOST = process.env.HOST || '0.0.0.0';
 const db = new WorkbenchDatabase();
 const engine = new AgentEngine(db);
 
+// Discover models on boot from saved credentials
+try {
+  const bootCreds = db.getProviderCredentials(true);
+  adapterManager.discoverAll(bootCreds).then(res => {
+    console.log('[OMENA] Boot model discovery completed for providers:', Object.keys(res));
+  }).catch(err => {
+    console.warn('[OMENA] Boot model discovery warning:', err.message);
+  });
+} catch (e) {
+  console.warn('[OMENA] Boot credential load warning:', e.message);
+}
+
 const MIME_TYPES = {
   '.html': 'text/html; charset=UTF-8',
   '.css': 'text/css; charset=UTF-8',
@@ -200,6 +212,155 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // --- Provider Configuration & Masked Status ---
+  if (pathname === '/api/providers/status' && req.method === 'GET') {
+    sendJson(res, 200, {
+      providers: db.getMaskedProviderStatus()
+    });
+    return;
+  }
+
+  if (pathname === '/api/providers/config' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const { credentials = {}, testConnection = true } = body;
+      const validation = {};
+      let allValid = true;
+
+      for (const [prov, key] of Object.entries(credentials)) {
+        if (key && typeof key === 'string' && key.trim().length > 0) {
+          if (testConnection) {
+            const check = await adapterManager.validateProvider(prov, key);
+            validation[prov] = check;
+            if (!check.valid) {
+              allValid = false;
+            }
+          } else {
+            validation[prov] = { valid: true };
+          }
+        }
+      }
+
+      if (allValid || !testConnection) {
+        // Save to DB
+        db.saveProviderCredentials(credentials);
+        // Discover models for valid providers
+        for (const [prov, key] of Object.entries(credentials)) {
+          if (key && typeof key === 'string' && key.trim().length > 0) {
+            const models = await adapterManager.discoverProviderModels(prov, key);
+            if (models && models.length > 0) {
+              adapterManager.registerDiscoveredModels(prov, models);
+            }
+          }
+        }
+      }
+
+      sendJson(res, allValid ? 200 : 400, {
+        success: allValid,
+        validation,
+        status: db.getMaskedProviderStatus(),
+        models: adapterManager.listModels()
+      });
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return;
+  }
+
+  // --- System Status & Hardware/CDP Telemetry ---
+  if (pathname === '/api/system/status' && req.method === 'GET') {
+    const isDbHealthy = db.healthCheck();
+    const portFile = process.env.DEVTOOLS_PORT_FILE || (
+      process.platform === 'win32' && process.env.LOCALAPPDATA
+        ? path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'User Data', 'DevToolsActivePort')
+        : '/tmp/DevToolsActivePort'
+    );
+    const chromeActive = fs.existsSync(portFile);
+    const execIdentity = engine.orchestrator.workbench.getExecutionIdentity();
+    
+    const modelParam = parsedUrl.searchParams.get('model') || 'gemini-2.0-flash';
+    const adapter = adapterManager.getAdapter(modelParam);
+    const modelCaps = adapter ? adapter.getCapabilities() : {
+      id: modelParam,
+      name: modelParam,
+      contextWindow: 1048576,
+      vision: true,
+      reasoning: false
+    };
+
+    sendJson(res, 200, {
+      status: 'online',
+      cdp: {
+        active: chromeActive,
+        target: chromeActive ? 'Chromium 134+ (CDP: Connected)' : 'Chromium (CDP: Standby)'
+      },
+      vision: Boolean(modelCaps.vision),
+      activeModel: {
+        id: modelCaps.id,
+        name: modelCaps.name,
+        contextWindow: modelCaps.contextWindow || 1048576,
+        vision: Boolean(modelCaps.vision),
+        reasoning: Boolean(modelCaps.reasoning)
+      },
+      execution: execIdentity,
+      uptime: process.uptime()
+    });
+    return;
+  }
+
+  // --- Terminal Command Runner ---
+  if (pathname === '/api/terminal/exec' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const command = body.command;
+      if (!command) {
+        sendJson(res, 400, { error: 'Missing command' });
+        return;
+      }
+      const output = await engine.orchestrator.workbench.terminal.executeCommand(command);
+      sendJson(res, 200, output);
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return;
+  }
+
+  // --- Workspace Tree ---
+  if (pathname === '/api/workspace/tree' && req.method === 'GET') {
+    try {
+      const files = await engine.orchestrator.workbench.filesystem.listDirectory('.', true);
+      const list = Array.isArray(files) ? files : (files.entries || []);
+      sendJson(res, 200, { tree: list, root: engine.orchestrator.workbench.workspaceRoot });
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return;
+  }
+
+  // --- Memory Store Viewer ---
+  if (pathname === '/api/memory/view' && req.method === 'GET') {
+    try {
+      const memDir = path.join(WORKSPACE_ROOT, 'storage', 'memory');
+      const memoryFiles = {};
+      if (fs.existsSync(memDir)) {
+        const files = fs.readdirSync(memDir);
+        for (const f of files) {
+          if (f.endsWith('.json')) {
+            try {
+              memoryFiles[f] = JSON.parse(fs.readFileSync(path.join(memDir, f), 'utf8'));
+            } catch {
+              memoryFiles[f] = fs.readFileSync(path.join(memDir, f), 'utf8');
+            }
+          }
+        }
+      }
+      sendJson(res, 200, { memory: memoryFiles, path: memDir });
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return;
+  }
+
   // --- Protected: Streaming Chat / SSE (/api/chat and /api/stream) ---
   if ((pathname === '/api/chat' || pathname === '/api/stream') && req.method === 'POST') {
     let body = '';
@@ -336,8 +497,12 @@ const server = http.createServer(async (req, res) => {
       fs.createReadStream(frameFile).pipe(res);
       return;
     }
-    res.writeHead(404);
-    res.end('No frame available');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450"><rect width="800" height="450" fill="#090d16"/><rect x="20" y="20" width="760" height="410" rx="12" fill="#0f172a" stroke="#1e293b" stroke-width="2"/><circle cx="50" cy="50" r="6" fill="#ef4444"/><circle cx="70" cy="50" r="6" fill="#f59e0b"/><circle cx="90" cy="50" r="6" fill="#10b981"/><text x="400" y="220" dominant-baseline="middle" text-anchor="middle" fill="#94a3b8" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif" font-size="16" font-weight="600">Browser Display Standby</text><text x="400" y="250" dominant-baseline="middle" text-anchor="middle" fill="#64748b" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif" font-size="13">Trigger a browser automation or navigation task to stream live frames.</text></svg>`;
+    res.writeHead(200, {
+      'Content-Type': 'image/svg+xml',
+      'Cache-Control': 'no-cache'
+    });
+    res.end(svg);
     return;
   }
 
@@ -348,8 +513,12 @@ const server = http.createServer(async (req, res) => {
       fs.createReadStream(monitorFile).pipe(res);
       return;
     }
-    res.writeHead(404);
-    res.end('Monitor image not found');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450"><rect width="800" height="450" fill="#090d16"/><rect x="20" y="20" width="760" height="410" rx="12" fill="#0f172a" stroke="#1e293b" stroke-width="2"/><text x="400" y="220" dominant-baseline="middle" text-anchor="middle" fill="#94a3b8" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif" font-size="16" font-weight="600">4K Monitor Composer Standby</text><text x="400" y="250" dominant-baseline="middle" text-anchor="middle" fill="#64748b" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif" font-size="13">Launch a monitor rendering task to compose photorealistic screen capture.</text></svg>`;
+    res.writeHead(200, {
+      'Content-Type': 'image/svg+xml',
+      'Cache-Control': 'no-cache'
+    });
+    res.end(svg);
     return;
   }
 

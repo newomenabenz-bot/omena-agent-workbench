@@ -15,13 +15,88 @@ export class DeepSeekAdapter extends BaseProviderAdapter {
     });
   }
 
+  async validateCredential(credential) {
+    const key = credential?.deepseekKey || credential?.apiKey || (typeof credential === 'string' ? credential : null) || process.env.DEEPSEEK_API_KEY;
+    if (!key || typeof key !== 'string' || key.trim().length === 0) {
+      return { valid: false, error: 'No DeepSeek API key provided.' };
+    }
+
+    try {
+      const res = await fetch('https://api.deepseek.com/models', {
+        headers: {
+          'Authorization': `Bearer ${key.trim()}`
+        }
+      });
+      if (res.ok) {
+        return { valid: true };
+      }
+      const data = await res.json().catch(() => ({}));
+      const msg = data.error?.message || `HTTP ${res.status}: ${res.statusText}`;
+      return { valid: false, error: `DeepSeek validation failed: ${msg}` };
+    } catch (err) {
+      return { valid: false, error: `DeepSeek validation error: ${err.message}` };
+    }
+  }
+
+  async discoverModels(credential) {
+    const key = credential?.deepseekKey || credential?.apiKey || (typeof credential === 'string' ? credential : null) || process.env.DEEPSEEK_API_KEY;
+    const staticFallback = [
+      {
+        id: 'deepseek-r1',
+        name: 'DeepSeek R1 (Reasoner)',
+        provider: 'DeepSeek AI',
+        contextWindow: 64000,
+        streaming: true,
+        tools: true,
+        vision: false,
+        reasoning: true
+      },
+      {
+        id: 'deepseek-chat',
+        name: 'DeepSeek V3 (Chat)',
+        provider: 'DeepSeek AI',
+        contextWindow: 64000,
+        streaming: true,
+        tools: true,
+        vision: false,
+        reasoning: false
+      }
+    ];
+
+    if (!key) return staticFallback;
+
+    try {
+      const res = await fetch('https://api.deepseek.com/models', {
+        headers: { 'Authorization': `Bearer ${key.trim()}` }
+      });
+      if (!res.ok) return staticFallback;
+      const data = await res.json();
+      if (!data.data || !Array.isArray(data.data)) return staticFallback;
+
+      const discovered = data.data.map(m => ({
+        id: m.id,
+        name: m.id === 'deepseek-reasoner' ? 'DeepSeek R1 Reasoner' : (m.id === 'deepseek-chat' ? 'DeepSeek V3 Chat' : m.id),
+        provider: 'DeepSeek AI',
+        contextWindow: 64000,
+        streaming: true,
+        tools: true,
+        vision: false,
+        reasoning: m.id.includes('reasoner') || m.id.includes('r1')
+      }));
+
+      return discovered.length > 0 ? discovered : staticFallback;
+    } catch {
+      return staticFallback;
+    }
+  }
+
   formatPayload({ prompt, messages = [], tools = [] }) {
     const formattedMsgs = messages.length > 0 
       ? messages.map(m => ({ role: m.role, content: m.content }))
       : [{ role: 'user', content: prompt }];
 
     const payload = {
-      model: 'deepseek-reasoner',
+      model: this.id === 'deepseek-r1' ? 'deepseek-reasoner' : (this.id || 'deepseek-reasoner'),
       messages: formattedMsgs,
       stream: true
     };

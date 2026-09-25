@@ -16,6 +16,76 @@ export class LocalAdapter extends BaseProviderAdapter {
     });
   }
 
+  async validateCredential(credential) {
+    const endpoint = credential?.localEndpoint || (typeof credential === 'string' ? credential : null) || process.env.LOCAL_AI_URL || 'http://host.docker.internal:11434';
+    const cleanUrl = endpoint.replace(/\/+$/, '');
+
+    try {
+      // Try Ollama tags endpoint
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+      const res = await fetch(`${cleanUrl}/api/tags`, { signal: controller.signal }).catch(() => null);
+      clearTimeout(timeout);
+
+      if (res && res.ok) {
+        return { valid: true };
+      }
+
+      // Try OpenAI-compatible /v1/models
+      const controller2 = new AbortController();
+      const timeout2 = setTimeout(() => controller2.abort(), 4000);
+      const res2 = await fetch(`${cleanUrl}/v1/models`, { signal: controller2.signal }).catch(() => null);
+      clearTimeout(timeout2);
+
+      if (res2 && res2.ok) {
+        return { valid: true };
+      }
+
+      return { valid: false, error: `Local endpoint ${cleanUrl} not reachable. Verify Ollama or local LLM server is running.` };
+    } catch (err) {
+      return { valid: false, error: `Local endpoint error: ${err.message}` };
+    }
+  }
+
+  async discoverModels(credential) {
+    const endpoint = credential?.localEndpoint || (typeof credential === 'string' ? credential : null) || process.env.LOCAL_AI_URL || 'http://host.docker.internal:11434';
+    const cleanUrl = endpoint.replace(/\/+$/, '');
+    const staticFallback = [
+      {
+        id: 'local-gguf',
+        name: 'Local Ollama / GGUF (Llama 3)',
+        provider: 'Local GGUF / Ollama',
+        contextWindow: 8192,
+        streaming: true,
+        tools: false,
+        vision: false,
+        reasoning: false
+      }
+    ];
+
+    try {
+      const res = await fetch(`${cleanUrl}/api/tags`).catch(() => null);
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data.models && Array.isArray(data.models) && data.models.length > 0) {
+          return data.models.map(m => ({
+            id: `local-${m.name}`,
+            name: `Local: ${m.name}`,
+            provider: 'Local GGUF / Ollama',
+            contextWindow: 8192,
+            streaming: true,
+            tools: false,
+            vision: false,
+            reasoning: false
+          }));
+        }
+      }
+      return staticFallback;
+    } catch {
+      return staticFallback;
+    }
+  }
+
   async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit }) {
     const baseUrl = credentials.localEndpoint || process.env.LOCAL_AI_URL || 'http://host.docker.internal:11434/v1';
 

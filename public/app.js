@@ -1,4 +1,4 @@
-// OMENA Enterprise Mobile Agent Workbench Client Engine v2.0
+// OMENA Enterprise Mobile Agent Workbench Client Engine v4.0.1
 (function() {
   const elements = {
     appContainer: document.getElementById('app-container'),
@@ -29,16 +29,45 @@
     btnNewChat: document.getElementById('btn-new-chat'),
     btnOpenBrowserView: document.getElementById('btn-open-browser-view'),
     btnOpenMonitorView: document.getElementById('btn-open-monitor-view'),
+    btnOpenTerminalView: document.getElementById('btn-open-terminal-view'),
+    btnOpenWorkspaceView: document.getElementById('btn-open-workspace-view'),
+    btnOpenMemoryView: document.getElementById('btn-open-memory-view'),
     pillModel: document.getElementById('pill-model'),
+    pillCtx: document.getElementById('pill-ctx'),
+    pillBrowser: document.getElementById('pill-browser'),
+    pillVision: document.getElementById('pill-vision'),
+    pillShell: document.getElementById('pill-shell'),
     selectModel: document.getElementById('select-model'),
+    // Provider inputs & status
     inputGeminiKey: document.getElementById('input-gemini-key'),
     inputOpenaiKey: document.getElementById('input-openai-key'),
     inputClaudeKey: document.getElementById('input-claude-key'),
+    inputDeepseekKey: document.getElementById('input-deepseek-key'),
     inputLocalEndpoint: document.getElementById('input-local-endpoint'),
+    statusGemini: document.getElementById('status-gemini'),
+    statusOpenai: document.getElementById('status-openai'),
+    statusClaude: document.getElementById('status-claude'),
+    statusDeepseek: document.getElementById('status-deepseek'),
+    statusLocal: document.getElementById('status-local'),
+    saveStatusMsg: document.getElementById('save-status-msg'),
     btnSaveKeys: document.getElementById('btn-save-keys'),
-    btnOpenWorkspaceFolder: document.getElementById('btn-open-workspace-folder'),
-    btnOpenMemoryViewer: document.getElementById('btn-open-memory-viewer'),
+    settingsCdpStatus: document.getElementById('settings-cdp-status'),
+    checkAutoExec: document.getElementById('check-auto-exec'),
     sessionsList: document.getElementById('sessions-list'),
+    // Modals
+    terminalModal: document.getElementById('terminal-modal'),
+    btnCloseTerminal: document.getElementById('btn-close-terminal'),
+    terminalOutput: document.getElementById('terminal-output'),
+    terminalCmdInput: document.getElementById('terminal-cmd-input'),
+    btnRunCmd: document.getElementById('btn-run-cmd'),
+    workspaceModal: document.getElementById('workspace-modal'),
+    btnCloseWorkspace: document.getElementById('btn-close-workspace'),
+    workspaceTreeContainer: document.getElementById('workspace-tree-container'),
+    workspaceFilePreview: document.getElementById('workspace-file-preview'),
+    memoryModal: document.getElementById('memory-modal'),
+    btnCloseMemory: document.getElementById('btn-close-memory'),
+    memoryTabs: document.getElementById('memory-tabs'),
+    memoryJsonView: document.getElementById('memory-json-view'),
     // Auth elements
     authModal: document.getElementById('auth-modal'),
     authForm: document.getElementById('auth-form'),
@@ -52,6 +81,9 @@
   let isRecording = false;
   let currentSessionId = localStorage.getItem('omena_active_session') || `session_${Date.now()}`;
   let availableModels = [];
+
+  const SUN_SVG = `<svg id="theme-icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>`;
+  const MOON_SVG = `<svg id="theme-icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>`;
 
   // --- Viewport & Mobile Virtual Keyboard Fixes ---
   function initViewportKeyboardHandling() {
@@ -141,57 +173,6 @@
     });
   }
 
-  // --- Dynamic Model Provider Capabilities ---
-  async function loadModels() {
-    try {
-      const res = await fetch('/api/models');
-      const data = await res.json();
-      if (data && data.models) {
-        availableModels = data.models;
-        if (elements.selectModel) {
-          elements.selectModel.innerHTML = availableModels.map(m => {
-            const caps = [];
-            if (m.tools) caps.push('Tools');
-            if (m.vision) caps.push('Vision');
-            if (m.reasoning) caps.push('Reasoning');
-            const capStr = caps.length > 0 ? ` [${caps.join(', ')}]` : '';
-            return `<option value="${m.id}">${m.name} (${m.id})${capStr}</option>`;
-          }).join('');
-
-          const savedModel = localStorage.getItem('omena_model') || data.default || 'gemini-2.0-flash';
-          elements.selectModel.value = savedModel;
-          updateModelPill(savedModel);
-        }
-      }
-    } catch (e) {
-      console.warn('[Model Load Notice]', e.message);
-    }
-  }
-
-  function updateModelPill(modelId) {
-    if (!elements.pillModel) return;
-    const span = elements.pillModel.querySelector('span');
-    const matched = availableModels.find(m => m.id === modelId);
-    if (span) span.innerText = matched ? matched.name : modelId;
-  }
-
-  if (elements.selectModel) {
-    elements.selectModel.addEventListener('change', (e) => {
-      const m = e.target.value;
-      localStorage.setItem('omena_model', m);
-      updateModelPill(m);
-    });
-  }
-
-  if (elements.pillModel) {
-    elements.pillModel.addEventListener('click', () => {
-      if (elements.settingsModal) {
-        elements.settingsModal.classList.add('open');
-        if (elements.selectModel) elements.selectModel.focus();
-      }
-    });
-  }
-
   // --- Theme Mode ---
   function initTheme() {
     const savedTheme = localStorage.getItem('omena_theme') || 'dark';
@@ -202,6 +183,10 @@
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('omena_theme', theme);
     if (elements.selectTheme) elements.selectTheme.value = theme;
+    if (elements.btnToggleTheme) {
+      elements.btnToggleTheme.innerHTML = theme === 'dark' ? SUN_SVG : MOON_SVG;
+      elements.btnToggleTheme.title = theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode';
+    }
   }
 
   if (elements.btnToggleTheme) {
@@ -215,7 +200,199 @@
     elements.selectTheme.addEventListener('change', (e) => setTheme(e.target.value));
   }
 
-  // Auto-resize Textarea
+  // --- Dynamic Model Provider Capabilities & Telemetry ---
+  async function loadModels() {
+    try {
+      const res = await fetch('/api/models', { credentials: 'include' });
+      const data = await res.json();
+      if (data && data.models) {
+        availableModels = data.models;
+        if (elements.selectModel) {
+          const savedModel = localStorage.getItem('omena_model') || data.default || 'gemini-2.0-flash';
+          elements.selectModel.innerHTML = availableModels.map(m => {
+            const caps = [];
+            if (m.tools) caps.push('Tools');
+            if (m.vision) caps.push('Vision');
+            if (m.reasoning) caps.push('Reasoning');
+            const capStr = caps.length > 0 ? ` [${caps.join(', ')}]` : '';
+            const selected = m.id === savedModel ? ' selected' : '';
+            return `<option value="${m.id}"${selected}>${m.name} (${m.id})${capStr}</option>`;
+          }).join('');
+
+          elements.selectModel.value = savedModel;
+          updateSystemStatus(savedModel);
+        }
+      }
+    } catch (e) {
+      console.warn('[Model Load Notice]', e.message);
+    }
+  }
+
+  async function updateSystemStatus(modelId) {
+    const currentModel = modelId || (elements.selectModel ? elements.selectModel.value : 'gemini-2.0-flash');
+    try {
+      const res = await fetch(`/api/system/status?model=${encodeURIComponent(currentModel)}`, { credentials: 'include' });
+      if (!res.ok) return;
+      const data = await res.json();
+
+      // 1. Model Pill
+      if (elements.pillModel) {
+        const span = elements.pillModel.querySelector('span');
+        if (span) span.innerText = data.activeModel?.name || currentModel;
+      }
+
+      // 2. Context Window Pill
+      if (elements.pillCtx) {
+        const span = elements.pillCtx.querySelector('span');
+        const ctxLimit = data.activeModel?.contextWindow || 1048576;
+        if (span) span.innerText = `ctx: ${ctxLimit.toLocaleString()}`;
+      }
+
+      // 3. CDP Browser Pill
+      if (elements.pillBrowser) {
+        const span = elements.pillBrowser.querySelector('span');
+        if (span) {
+          span.innerText = data.cdp?.active ? 'Chrome DevTools Active' : 'Chrome (CDP Standby)';
+        }
+        elements.pillBrowser.style.borderColor = data.cdp?.active ? 'var(--accent-color)' : 'var(--pill-border)';
+      }
+
+      // 4. Vision Pill
+      if (elements.pillVision) {
+        elements.pillVision.style.opacity = data.vision ? '1' : '0.4';
+      }
+
+      // 5. Settings CDP Status
+      if (elements.settingsCdpStatus) {
+        elements.settingsCdpStatus.innerText = data.cdp?.active ? '127.0.0.1:9222 (Connected)' : '127.0.0.1:9222 (Standby)';
+        elements.settingsCdpStatus.style.color = data.cdp?.active ? 'var(--accent-color)' : 'var(--text-muted)';
+      }
+    } catch (e) {
+      console.warn('[System Status Notice]', e.message);
+    }
+  }
+
+  if (elements.selectModel) {
+    elements.selectModel.addEventListener('change', (e) => {
+      const m = e.target.value;
+      localStorage.setItem('omena_model', m);
+      updateSystemStatus(m);
+    });
+  }
+
+  if (elements.pillModel) {
+    elements.pillModel.addEventListener('click', () => {
+      if (elements.settingsModal) {
+        elements.settingsModal.classList.add('open');
+        if (elements.selectModel) elements.selectModel.focus();
+      }
+    });
+  }
+
+  // --- Provider Subscriptions Management ---
+  async function loadProviderStatus() {
+    try {
+      const res = await fetch('/api/providers/status', { credentials: 'include' });
+      if (!res.ok) return;
+      const data = await res.json();
+      const providers = data.providers || {};
+
+      const updateBadge = (el, pData) => {
+        if (!el) return;
+        if (pData && pData.configured) {
+          el.innerText = `Active (${pData.maskedKey || 'configured'})`;
+          el.className = 'provider-status-badge valid';
+        } else {
+          el.innerText = 'Not configured';
+          el.className = 'provider-status-badge invalid';
+        }
+      };
+
+      updateBadge(elements.statusGemini, providers.gemini);
+      updateBadge(elements.statusOpenai, providers.openai);
+      updateBadge(elements.statusClaude, providers.anthropic);
+      updateBadge(elements.statusDeepseek, providers.deepseek);
+      updateBadge(elements.statusLocal, providers.local);
+
+      if (providers.local && providers.local.maskedKey && elements.inputLocalEndpoint) {
+        elements.inputLocalEndpoint.value = providers.local.maskedKey;
+      }
+    } catch (err) {
+      console.warn('[Provider Status Load Notice]', err.message);
+    }
+  }
+
+  async function saveSubscriptions() {
+    const creds = {};
+    const geminiVal = elements.inputGeminiKey?.value.trim();
+    const openaiVal = elements.inputOpenaiKey?.value.trim();
+    const claudeVal = elements.inputClaudeKey?.value.trim();
+    const deepseekVal = elements.inputDeepseekKey?.value.trim();
+    const localVal = elements.inputLocalEndpoint?.value.trim();
+
+    if (geminiVal) creds.gemini = geminiVal;
+    if (openaiVal) creds.openai = openaiVal;
+    if (claudeVal) creds.anthropic = claudeVal;
+    if (deepseekVal) creds.deepseek = deepseekVal;
+    if (localVal) creds.local = localVal;
+
+    if (elements.saveStatusMsg) {
+      elements.saveStatusMsg.style.display = 'block';
+      elements.saveStatusMsg.style.color = 'var(--text-secondary)';
+      elements.saveStatusMsg.innerText = 'Validating credentials with AI providers...';
+    }
+
+    try {
+      const res = await fetch('/api/providers/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          credentials: creds,
+          testConnection: true
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        if (elements.saveStatusMsg) {
+          elements.saveStatusMsg.style.color = 'var(--accent-color)';
+          elements.saveStatusMsg.innerText = '✓ Subscriptions successfully validated and persisted to SQLite.';
+        }
+        // Clear password fields for safety
+        if (elements.inputGeminiKey) elements.inputGeminiKey.value = '';
+        if (elements.inputOpenaiKey) elements.inputOpenaiKey.value = '';
+        if (elements.inputClaudeKey) elements.inputClaudeKey.value = '';
+        if (elements.inputDeepseekKey) elements.inputDeepseekKey.value = '';
+
+        await loadProviderStatus();
+        await loadModels();
+        setTimeout(() => {
+          if (elements.saveStatusMsg) elements.saveStatusMsg.style.display = 'none';
+        }, 4000);
+      } else {
+        const errorDetails = Object.entries(data.validation || {})
+          .filter(([, v]) => !v.valid)
+          .map(([k, v]) => `${k}: ${v.error}`)
+          .join('; ');
+        if (elements.saveStatusMsg) {
+          elements.saveStatusMsg.style.color = '#ef4444';
+          elements.saveStatusMsg.innerText = `Validation Failed: ${errorDetails || data.error || 'Check API keys'}`;
+        }
+      }
+    } catch (err) {
+      if (elements.saveStatusMsg) {
+        elements.saveStatusMsg.style.color = '#ef4444';
+        elements.saveStatusMsg.innerText = `Network Error: ${err.message}`;
+      }
+    }
+  }
+
+  if (elements.btnSaveKeys) {
+    elements.btnSaveKeys.addEventListener('click', saveSubscriptions);
+  }
+
+  // --- Auto-resize Textarea ---
   elements.userPrompt.addEventListener('input', () => {
     elements.userPrompt.style.height = 'auto';
     elements.userPrompt.style.height = Math.min(elements.userPrompt.scrollHeight, 120) + 'px';
@@ -228,28 +405,26 @@
     }
   });
 
-  elements.btnSend.addEventListener('click', handleSend);
+  if (elements.btnSend) {
+    elements.btnSend.addEventListener('click', handleSend);
+  }
 
-  // --- Voice Input (Web Speech API) ---
+  // --- Voice Dictation ---
   if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    recognition = new SpeechRec();
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new SpeechRecognition();
     recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    recognition.interimResults = false;
 
-    recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .map(r => r[0].transcript)
-        .join('');
-      elements.userPrompt.value = transcript;
-      elements.userPrompt.style.height = 'auto';
-      elements.userPrompt.style.height = Math.min(elements.userPrompt.scrollHeight, 120) + 'px';
+    recognition.onresult = (e) => {
+      const transcript = e.results[0][0].transcript;
+      elements.userPrompt.value += (elements.userPrompt.value ? ' ' : '') + transcript;
+      elements.userPrompt.dispatchEvent(new Event('input'));
     };
 
     recognition.onend = () => {
       isRecording = false;
-      elements.btnMic.classList.remove('recording');
+      elements.btnMic.classList.remove('active');
     };
 
     elements.btnMic.addEventListener('click', () => {
@@ -257,84 +432,93 @@
         try {
           recognition.start();
           isRecording = true;
-          elements.btnMic.classList.add('recording');
+          elements.btnMic.classList.add('active');
         } catch {}
       } else {
         recognition.stop();
         isRecording = false;
-        elements.btnMic.classList.remove('recording');
+        elements.btnMic.classList.remove('active');
       }
     });
   } else {
-    elements.btnMic.style.opacity = '0.4';
+    if (elements.btnMic) elements.btnMic.style.display = 'none';
   }
 
-  // --- Attachment Upload ---
-  elements.btnAttach.addEventListener('click', () => elements.fileUploader.click());
-  elements.fileUploader.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  // --- File Upload ---
+  if (elements.btnAttach) {
+    elements.btnAttach.addEventListener('click', () => elements.fileUploader.click());
+  }
 
-    appendUserMessage(`📎 Attached file: **${file.name}** (${(file.size / 1024).toFixed(1)} KB)`);
-    try {
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        credentials: 'include',
-        body: file
-      });
-      const data = await res.json();
-      if (data.ok) {
-        appendAssistantNotice(`✅ File **${file.name}** uploaded safely to \`storage/workbench_uploads/\``);
+  if (elements.fileUploader) {
+    elements.fileUploader.addEventListener('change', async (e) => {
+      const files = e.target.files;
+      if (!files || files.length === 0) return;
+
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+          elements.userPrompt.value += `\n[Uploading ${file.name}...]`;
+          const res = await fetch('/api/upload', {
+            method: 'POST',
+            credentials: 'include',
+            body: file
+          });
+          const data = await res.json();
+          elements.userPrompt.value = elements.userPrompt.value.replace(
+            `\n[Uploading ${file.name}...]`,
+            `\n[Attached: ${file.name} (server: ${data.filename})]`
+          );
+          elements.userPrompt.dispatchEvent(new Event('input'));
+        } catch (err) {
+          console.error('[Upload Error]', err);
+        }
       }
-    } catch (err) {
-      appendAssistantNotice(`⚠️ File upload failed: ${err.message}`);
-    }
-  });
+    });
+  }
 
-  // --- Sidebar & Sessions Management (SQLite API) ---
+  // --- Sidebar & Sessions Management ---
   async function loadSessionsList() {
     if (!elements.sessionsList) return;
     try {
       const res = await fetch('/api/sessions', { credentials: 'include' });
       if (!res.ok) return;
       const data = await res.json();
-      renderSessions(data.sessions || []);
-    } catch {}
-  }
+      const sessions = data.sessions || [];
 
-  function renderSessions(sessions) {
-    if (!elements.sessionsList) return;
-    if (sessions.length === 0) {
-      elements.sessionsList.innerHTML = `<div style="padding: 12px; font-size: 13px; color: var(--text-muted); text-align: center;">No previous sessions</div>`;
-      return;
-    }
+      if (sessions.length === 0) {
+        elements.sessionsList.innerHTML = '<div class="sidebar-item" style="color: var(--text-muted); font-size: 13px;">No archived sessions</div>';
+        return;
+      }
 
-    elements.sessionsList.innerHTML = sessions.map(s => `
-      <div class="session-item ${s.id === currentSessionId ? 'active' : ''}" data-id="${s.id}">
-        <div style="flex:1; overflow:hidden;">
-          <div class="session-title">${escapeHtml(s.title || 'Conversation')}</div>
-          <div class="session-date">${formatDate(s.updatedAt)}</div>
+      elements.sessionsList.innerHTML = sessions.map(s => `
+        <div class="sidebar-item session-item ${s.id === currentSessionId ? 'active' : ''}" data-id="${s.id}">
+          <div style="flex:1; overflow:hidden;">
+            <div style="font-weight: 500; font-size: 13px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${escapeHtml(s.title || 'Untitled Session')}</div>
+            <div style="font-size: 11px; color: var(--text-muted);">${formatDate(s.updatedAt)}</div>
+          </div>
+          <button class="icon-btn btn-del-session" data-del="${s.id}" title="Delete session" style="padding: 4px; font-size: 12px; color: var(--text-muted);">🗑️</button>
         </div>
-        <button class="icon-btn btn-del-session" data-del="${s.id}" title="Delete session" style="padding: 4px; opacity: 0.6;">✕</button>
-      </div>
-    `).join('');
+      `).join('');
 
-    elements.sessionsList.querySelectorAll('.session-item').forEach(item => {
-      item.addEventListener('click', (e) => {
-        if (e.target.closest('.btn-del-session')) return;
-        const id = item.getAttribute('data-id');
-        switchSession(id);
+      elements.sessionsList.querySelectorAll('.session-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+          if (e.target.closest('.btn-del-session')) return;
+          const id = item.getAttribute('data-id');
+          switchSession(id);
+        });
       });
-    });
 
-    elements.sessionsList.querySelectorAll('.btn-del-session').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const id = btn.getAttribute('data-del');
-        await deleteSession(id);
+      elements.sessionsList.querySelectorAll('.btn-del-session').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const id = btn.getAttribute('data-del');
+          await deleteSession(id);
+        });
       });
-    });
+    } catch (e) {
+      console.warn('[Sessions Load Warning]', e.message);
+    }
   }
 
   async function switchSession(sessionId) {
@@ -405,7 +589,7 @@
   elements.btnCloseSidebar.addEventListener('click', closeSidebar);
   elements.sidebarOverlay.addEventListener('click', closeSidebar);
 
-  // --- Bottom Sheet ---
+  // --- Bottom Sheet (Live Remote Browser & Monitor) ---
   function openBottomSheet(title, imgSrc) {
     elements.bottomSheetTitle.innerText = title;
     elements.bottomSheetImg.src = imgSrc;
@@ -435,8 +619,176 @@
     });
   }
 
+  // --- Terminal Console Modal ---
+  if (elements.btnOpenTerminalView) {
+    elements.btnOpenTerminalView.addEventListener('click', () => {
+      closeSidebar();
+      elements.terminalModal.classList.add('open');
+      if (elements.terminalCmdInput) elements.terminalCmdInput.focus();
+    });
+  }
+
+  if (elements.btnCloseTerminal) {
+    elements.btnCloseTerminal.addEventListener('click', () => {
+      elements.terminalModal.classList.remove('open');
+    });
+  }
+
+  async function executeTerminalCommand() {
+    const cmd = elements.terminalCmdInput.value.trim();
+    if (!cmd) return;
+    elements.terminalCmdInput.value = '';
+    elements.terminalOutput.textContent += `\n$ ${cmd}\n`;
+    elements.terminalOutput.scrollTop = elements.terminalOutput.scrollHeight;
+
+    try {
+      const res = await fetch('/api/terminal/exec', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ command: cmd })
+      });
+      const data = await res.json();
+      if (data.stdout) elements.terminalOutput.textContent += data.stdout;
+      if (data.stderr) elements.terminalOutput.textContent += data.stderr;
+      if (!data.stdout && !data.stderr) elements.terminalOutput.textContent += `[Exited with code ${data.exitCode}]\n`;
+    } catch (err) {
+      elements.terminalOutput.textContent += `[Error: ${err.message}]\n`;
+    }
+    elements.terminalOutput.scrollTop = elements.terminalOutput.scrollHeight;
+  }
+
+  if (elements.btnRunCmd) {
+    elements.btnRunCmd.addEventListener('click', executeTerminalCommand);
+  }
+  if (elements.terminalCmdInput) {
+    elements.terminalCmdInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        executeTerminalCommand();
+      }
+    });
+  }
+
+  // --- Workspace Explorer Modal ---
+  if (elements.btnOpenWorkspaceView) {
+    elements.btnOpenWorkspaceView.addEventListener('click', async () => {
+      closeSidebar();
+      elements.workspaceModal.classList.add('open');
+      await loadWorkspaceTree();
+    });
+  }
+
+  if (elements.btnCloseWorkspace) {
+    elements.btnCloseWorkspace.addEventListener('click', () => {
+      elements.workspaceModal.classList.remove('open');
+    });
+  }
+
+  async function loadWorkspaceTree() {
+    if (!elements.workspaceTreeContainer) return;
+    elements.workspaceTreeContainer.innerHTML = '<div>Loading workspace files...</div>';
+    elements.workspaceFilePreview.style.display = 'none';
+
+    try {
+      const res = await fetch('/api/workspace/tree', { credentials: 'include' });
+      const data = await res.json();
+      const files = data.tree || [];
+
+      if (files.length === 0) {
+        elements.workspaceTreeContainer.innerHTML = '<div style="color:var(--text-muted);">Workspace root is empty.</div>';
+        return;
+      }
+
+      elements.workspaceTreeContainer.innerHTML = files.map(f => {
+        const isDir = f.isDirectory || f.type === 'directory';
+        const icon = isDir ? '📁' : '📄';
+        return `
+          <div class="workspace-tree-item" data-path="${f.name || f.path}" style="padding: 4px 6px; cursor: pointer; border-radius: 6px; display: flex; align-items: center; gap: 8px;">
+            <span>${icon}</span>
+            <span>${escapeHtml(f.name || f.path)}</span>
+          </div>
+        `;
+      }).join('');
+
+      elements.workspaceTreeContainer.querySelectorAll('.workspace-tree-item').forEach(item => {
+        item.addEventListener('click', async () => {
+          const filePath = item.getAttribute('data-path');
+          try {
+            const fRes = await fetch(`/api/workspace/file?path=${encodeURIComponent(filePath)}`, { credentials: 'include' });
+            if (fRes.ok) {
+              const fData = await fRes.json();
+              elements.workspaceFilePreview.style.display = 'block';
+              elements.workspaceFilePreview.textContent = typeof fData.content === 'string' ? fData.content : JSON.stringify(fData, null, 2);
+            }
+          } catch {}
+        });
+      });
+    } catch (e) {
+      elements.workspaceTreeContainer.innerHTML = `<div style="color:#ef4444;">Error loading files: ${e.message}</div>`;
+    }
+  }
+
+  // --- Memory State Viewer Modal ---
+  if (elements.btnOpenMemoryView) {
+    elements.btnOpenMemoryView.addEventListener('click', async () => {
+      closeSidebar();
+      elements.memoryModal.classList.add('open');
+      await loadMemoryView();
+    });
+  }
+
+  if (elements.btnCloseMemory) {
+    elements.btnCloseMemory.addEventListener('click', () => {
+      elements.memoryModal.classList.remove('open');
+    });
+  }
+
+  async function loadMemoryView() {
+    if (!elements.memoryJsonView) return;
+    elements.memoryJsonView.textContent = 'Loading persistent memory stores...';
+
+    try {
+      const res = await fetch('/api/memory/view', { credentials: 'include' });
+      const data = await res.json();
+      const mem = data.memory || {};
+      const keys = Object.keys(mem);
+
+      if (keys.length === 0) {
+        elements.memoryTabs.innerHTML = '';
+        elements.memoryJsonView.textContent = 'No memory store files initialized yet.';
+        return;
+      }
+
+      elements.memoryTabs.innerHTML = keys.map((k, idx) => `
+        <button class="memory-tab-btn ${idx === 0 ? 'active' : ''}" data-key="${k}">${k}</button>
+      `).join('');
+
+      const renderTab = (k) => {
+        const val = mem[k];
+        elements.memoryJsonView.textContent = typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val);
+      };
+
+      renderTab(keys[0]);
+
+      elements.memoryTabs.querySelectorAll('.memory-tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          elements.memoryTabs.querySelectorAll('.memory-tab-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          renderTab(btn.getAttribute('data-key'));
+        });
+      });
+    } catch (e) {
+      elements.memoryJsonView.textContent = `Error reading memory store: ${e.message}`;
+    }
+  }
+
   // --- Settings Modal ---
-  elements.btnOpenSettings.addEventListener('click', () => elements.settingsModal.classList.add('open'));
+  elements.btnOpenSettings.addEventListener('click', () => {
+    loadProviderStatus();
+    updateSystemStatus();
+    elements.settingsModal.classList.add('open');
+  });
   elements.btnCloseSettings.addEventListener('click', () => elements.settingsModal.classList.remove('open'));
 
   // --- Message Sending & Real-Time Event Streaming ---
@@ -459,11 +811,9 @@
     const card = document.createElement('div');
     card.className = 'assistant-bubble';
     
-    // Tools container inside message
     const toolsContainer = document.createElement('div');
     toolsContainer.className = 'assistant-tools-section';
 
-    // Content container inside message
     const contentContainer = document.createElement('div');
     contentContainer.className = 'assistant-content markdown-body';
     contentContainer.innerHTML = '<span class="cursor-blink">▍</span>';
@@ -475,13 +825,6 @@
     scrollToBottom();
 
     const selectedModel = elements.selectModel ? elements.selectModel.value : 'gemini-2.0-flash';
-    const credentials = {
-      geminiKey: localStorage.getItem('omena_gemini_key') || '',
-      openaiKey: localStorage.getItem('omena_openai_key') || '',
-      claudeKey: localStorage.getItem('omena_claude_key') || '',
-      localEndpoint: localStorage.getItem('omena_local_endpoint') || 'http://localhost:11434'
-    };
-
     let fullText = '';
     const activeToolElements = new Map();
 
@@ -493,7 +836,6 @@
         body: JSON.stringify({
           prompt,
           model: selectedModel,
-          credentials,
           sessionId: currentSessionId
         })
       });
@@ -565,17 +907,18 @@
       details.open = true;
 
       const summary = document.createElement('summary');
-      summary.className = 'tool-summary';
+      summary.className = 'tool-accordion-header';
       summary.innerHTML = `
-        <span class="tool-badge">
-          ⚙️ <strong>${escapeHtml(event.tool || 'Tool')}</strong>
-          <span style="opacity:0.7;">${escapeHtml(event.input?.command || event.input?.action || event.input?.url || '')}</span>
-        </span>
-        <span class="tool-badge-pill" id="badge-${event.callId}">Running...</span>
+        <div class="tool-badge-left">
+          <span class="tool-status-dot"></span>
+          <span>⚙️ <strong>${escapeHtml(event.tool || 'Tool')}</strong></span>
+          <span style="opacity:0.7; font-size:11px;">${escapeHtml(event.input?.command || event.input?.action || event.input?.url || '')}</span>
+        </div>
+        <span class="provider-status-badge" id="badge-${event.callId}">Running...</span>
       `;
 
       const logBody = document.createElement('div');
-      logBody.className = 'tool-log-body';
+      logBody.className = 'tool-accordion-body';
       logBody.id = `log-${event.callId}`;
 
       details.appendChild(summary);
@@ -594,15 +937,14 @@
       if (toolEl) {
         const badge = toolEl.summary.querySelector(`#badge-${event.callId}`);
         if (badge) {
-          badge.innerText = event.exitCode === 0 ? `✓ ${event.durationMs}ms` : `⛔ Blocked`;
-          badge.className = `tool-badge-pill ${event.exitCode === 0 ? 'success' : 'blocked'}`;
+          badge.innerText = event.exitCode === 0 ? `✓ ${event.durationMs || 0}ms` : `⛔ Blocked`;
+          badge.className = `provider-status-badge ${event.exitCode === 0 ? 'valid' : 'invalid'}`;
         }
         if (event.result && !toolEl.logBody.textContent.includes(event.result)) {
           toolEl.logBody.textContent += `\n[Result] ${event.result}\n`;
         }
-        // Auto-collapse completed safe tools after 1s
         if (event.exitCode === 0) {
-          setTimeout(() => { toolEl.details.open = false; }, 1000);
+          setTimeout(() => { toolEl.details.open = false; }, 1500);
         }
       }
     } else if (event.type === 'browser_frame') {
@@ -631,14 +973,6 @@
     if (scroll) scrollToBottom();
   }
 
-  function appendAssistantNotice(text) {
-    const row = document.createElement('div');
-    row.className = 'message-row assistant';
-    row.innerHTML = `<div class="assistant-bubble"><div class="assistant-content markdown-body">${marked.parse(text)}</div></div>`;
-    elements.messagesContainer.appendChild(row);
-    scrollToBottom();
-  }
-
   function renderStoredAssistantMessage(m) {
     const row = document.createElement('div');
     row.className = 'message-row assistant';
@@ -652,11 +986,14 @@
         const details = document.createElement('details');
         details.className = 'tool-accordion';
         details.innerHTML = `
-          <summary class="tool-summary">
-            <span class="tool-badge">⚙️ <strong>${escapeHtml(t.tool || 'Tool')}</strong></span>
-            <span class="tool-badge-pill ${t.exitCode === 0 ? 'success' : 'blocked'}">${t.exitCode === 0 ? `✓ ${t.durationMs || 0}ms` : '⛔ Blocked'}</span>
+          <summary class="tool-accordion-header">
+            <div class="tool-badge-left">
+              <span class="tool-status-dot"></span>
+              <span>⚙️ <strong>${escapeHtml(t.tool || 'Tool')}</strong></span>
+            </div>
+            <span class="provider-status-badge ${t.exitCode === 0 ? 'valid' : 'invalid'}">${t.exitCode === 0 ? `✓ ${t.durationMs || 0}ms` : '⛔ Blocked'}</span>
           </summary>
-          <div class="tool-log-body">${escapeHtml(t.result || 'Executed')}</div>
+          <div class="tool-accordion-body" style="display:block;">${escapeHtml(t.result || 'Executed')}</div>
         `;
         toolsSec.appendChild(details);
       });
@@ -702,6 +1039,7 @@
   function initWorkbench() {
     initTheme();
     loadModels();
+    loadProviderStatus();
     loadSessionsList();
     initViewportKeyboardHandling();
   }
