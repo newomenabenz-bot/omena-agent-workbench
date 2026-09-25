@@ -85,7 +85,8 @@ export async function publishV401() {
     ref: 'v4.0.1',
     message: 'OMENA Mobile Agent Workbench v4.0.1 Stabilization Release',
     tagger: author,
-    object: commitSha
+    object: commitSha,
+    force: true
   });
   console.log(`  ✅ Created tag v4.0.1 (tag object SHA: ${tagSha})`);
 
