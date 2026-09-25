@@ -93,7 +93,7 @@ export async function publishV410() {
 
   // 4. Create annotated tag v4.1.0
   console.log('\n▶ [4/9] Creating annotated tag v4.1.0...');
-  const tagSha = await git.annotatedTag({
+  await git.annotatedTag({
     fs,
     dir: REPO_DIR,
     ref: 'v4.1.0',
@@ -102,6 +102,7 @@ export async function publishV410() {
     object: commitSha,
     force: true
   });
+  const tagSha = await git.resolveRef({ fs, dir: REPO_DIR, ref: 'refs/tags/v4.1.0' });
   console.log(`  ✅ Created tag v4.1.0 (tag object SHA: ${tagSha})`);
 
   // 5. Push main branch to GitHub
@@ -193,10 +194,17 @@ export async function publishV410() {
     });
     const clonedFiles = fs.readdirSync(cloneTargetDir);
     console.log(`  ✅ Successfully cloned tag v4.1.0 to clean destination (${clonedFiles.length} entries verified).`);
-    const clonedCommit = await git.resolveRef({ fs, dir: cloneTargetDir, ref: 'HEAD' });
-    console.log(`  ✅ Cloned HEAD commit/tag ref verified: ${clonedCommit}`);
-    if (clonedCommit !== commitSha && clonedCommit !== tagSha) {
-      throw new Error(`Cloned commit ${clonedCommit} does not match release commit ${commitSha} or tag ${tagSha}`);
+    const clonedHead = await git.resolveRef({ fs, dir: cloneTargetDir, ref: 'HEAD' });
+    console.log(`  ✅ Cloned HEAD commit/tag ref verified: ${clonedHead}`);
+    let clonedCommitSha = clonedHead;
+    try {
+      const tagObj = await git.readTag({ fs, dir: cloneTargetDir, oid: clonedHead });
+      if (tagObj && tagObj.tag && tagObj.tag.object) {
+        clonedCommitSha = tagObj.tag.object;
+      }
+    } catch {}
+    if (clonedCommitSha !== commitSha && clonedHead !== tagSha) {
+      throw new Error(`Cloned commit ${clonedCommitSha} does not match release commit ${commitSha} or tag ${tagSha}`);
     }
     console.log(`  ✅ Verified: Tag v4.1.0 correctly targets release commit ${commitSha}`);
   } finally {
@@ -240,6 +248,12 @@ export async function publishV410() {
   const manifestPath = path.join(REPO_DIR, 'release_manifest.json');
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
   console.log(`  ✅ Saved release manifest to ${manifestPath}`);
+
+  const brainManifestPath = 'C:/Users/Administrator/.gemini/antigravity/brain/e8d8888b-3e29-4762-9abb-431dbd3bf650/release_manifest.json';
+  try {
+    fs.writeFileSync(brainManifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    console.log(`  ✅ Saved brain artifact manifest to ${brainManifestPath}`);
+  } catch {}
 
   console.log('\n======================================================================');
   console.log('🎉 OMENA MULTI-PROVIDER AI RUNTIME v4.1.0 RELEASE COMPLETE & VERIFIED');
