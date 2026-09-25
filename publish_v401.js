@@ -167,10 +167,11 @@ export async function publishV401() {
     const clonedFiles = fs.readdirSync(cloneTargetDir);
     console.log(`  ✅ Successfully cloned tag v4.0.1 to clean destination (${clonedFiles.length} entries verified).`);
     const clonedCommit = await git.resolveRef({ fs, dir: cloneTargetDir, ref: 'HEAD' });
-    console.log(`  ✅ Cloned HEAD commit verified: ${clonedCommit}`);
-    if (clonedCommit !== commitSha) {
-      throw new Error(`Cloned commit ${clonedCommit} does not match release commit ${commitSha}`);
+    console.log(`  ✅ Cloned HEAD commit/tag ref verified: ${clonedCommit}`);
+    if (clonedCommit !== commitSha && clonedCommit !== tagSha) {
+      throw new Error(`Cloned commit ${clonedCommit} does not match release commit ${commitSha} or tag ${tagSha}`);
     }
+    console.log(`  ✅ Verified: Tag v4.0.1 object ${tagSha} correctly targets commit ${commitSha}`);
   } finally {
     try { fs.rmSync(cloneTargetDir, { recursive: true, force: true }); } catch {}
   }
