@@ -10,7 +10,16 @@ import dns from 'node:dns/promises';
 import { URL } from 'url';
 import path from 'path';
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'omena2026';
+let adminPassword = process.env.ADMIN_PASSWORD;
+if (!adminPassword) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('FATAL SECURITY CONFIGURATION: ADMIN_PASSWORD environment variable is mandatory in production.');
+  } else {
+    adminPassword = process.env.DEV_ADMIN_PASSWORD || 'omena-dev-admin';
+    console.warn(`[SECURITY WARNING] ADMIN_PASSWORD was not configured. Using development fallback: "${adminPassword}".`);
+  }
+}
+const ADMIN_PASSWORD = adminPassword;
 
 // Dangerous command patterns that must be blocked
 const BLOCKED_COMMAND_PATTERNS = [

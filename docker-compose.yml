@@ -15,11 +15,13 @@ services:
       - NODE_ENV=production
       - PORT=8080
       - HOST=0.0.0.0
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-omena2026}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in .env}
       - LOCAL_AI_URL=${LOCAL_AI_URL:-http://host.docker.internal:11434/v1}
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
       - WORKSPACE_ROOT=/app/workspace
       - DATABASE_PATH=/app/storage/workbench.db
+      - EXECUTION_MODE=container
+      - EXECUTION_PRIVILEGE=standard
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

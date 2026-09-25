@@ -18,6 +18,7 @@ export async function runRemoteDockerRC(config) {
   console.log('======================================================================\n');
 
   const conn = new SSHClient();
+  const RC_PASSWORD = config.adminPassword || process.env.ADMIN_PASSWORD || 'omena-rc-test-admin';
   const results = {
     stepsPassed: [],
     stepsFailed: [],
@@ -193,7 +194,7 @@ export async function runRemoteDockerRC(config) {
 
         // Step 6: Verify authenticated /api/models, session APIs, SSE, browser, and shell workflows
         console.log('\n[Criterion 6] Running Endpoints & Security Test Suite against container...');
-        const testSuiteRes = await execCmd(`docker exec -e TEST_URL=http://localhost:8080 -e ADMIN_PASSWORD=omena2026 omena-agent-workbench node test_endpoints.js`);
+        const testSuiteRes = await execCmd(`docker exec -e TEST_URL=http://localhost:8080 -e ADMIN_PASSWORD=${RC_PASSWORD} omena-agent-workbench node test_endpoints.js`);
         if (testSuiteRes.code !== 0) {
           throw new Error(`Endpoints test suite failed inside container: ${testSuiteRes.stderr}\n${testSuiteRes.stdout}`);
         }
@@ -220,7 +221,7 @@ export async function runRemoteDockerRC(config) {
             sessReq.write(JSON.stringify({ title: 'RC_PERSISTENCE_TEST_SESSION' }));
             sessReq.end();
           });
-          loginReq.write(JSON.stringify({ password: 'omena2026' }));
+          loginReq.write(JSON.stringify({ password: '${RC_PASSWORD}' }));
           loginReq.end();
         `;
         const sessionCreateRes = await execCmd(`docker exec omena-agent-workbench node -e "${createSessionScript.replace(/\n/g, ' ')}"`);
@@ -269,7 +270,7 @@ export async function runRemoteDockerRC(config) {
             });
             sessReq.end();
           });
-          loginReq.write(JSON.stringify({ password: 'omena2026' }));
+          loginReq.write(JSON.stringify({ password: '${RC_PASSWORD}' }));
           loginReq.end();
         `;
         const persistCheckRes = await execCmd(`docker exec omena-agent-workbench node -e "${verifyPersistScript.replace(/\n/g, ' ')}"`);
@@ -299,7 +300,7 @@ export async function runRemoteDockerRC(config) {
 
         // Step 13: Run SSRF/path/shell security regression suite
         console.log('\n[Criterion 13] Running SSRF, Directory Traversal, and Guardrail Regression Suite...');
-        const securityTestRes = await execCmd(`docker exec -e TEST_URL=http://localhost:8080 -e ADMIN_PASSWORD=omena2026 omena-agent-workbench node -e "
+        const securityTestRes = await execCmd(`docker exec -e TEST_URL=http://localhost:8080 -e ADMIN_PASSWORD=${RC_PASSWORD} omena-agent-workbench node -e "
           const { validateSafeCommand, validateTargetUrl, isPathContained } = require('./security.js');
           let ok = true;
           // 1. Command guardrail

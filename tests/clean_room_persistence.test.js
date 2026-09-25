@@ -38,7 +38,7 @@ function startServer(port, dbPath) {
       ...process.env,
       PORT: String(port),
       DATABASE_PATH: dbPath,
-      ADMIN_PASSWORD: 'omena2026-test',
+      ADMIN_PASSWORD: 'test-admin-password',
       WORKSPACE_ROOT
     },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -79,7 +79,7 @@ async function runCleanRoomSuite() {
   const loginRes = await fetch(`http://localhost:${TEST_PORT}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password: 'omena2026-test' })
+    body: JSON.stringify({ password: 'test-admin-password' })
   });
   assert('Phase 1: POST /api/auth/login succeeds', loginRes.ok);
   const cookieHeader = loginRes.headers.get('set-cookie');
@@ -146,7 +146,7 @@ async function runCleanRoomSuite() {
   const loginRes2 = await fetch(`http://localhost:${TEST_PORT}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password: 'omena2026-test' })
+    body: JSON.stringify({ password: 'test-admin-password' })
   });
   const cookie2 = loginRes2.headers.get('set-cookie').split(';')[0];
 

@@ -14,6 +14,7 @@ const __dirname = path.dirname(__filename);
 
 const HOST_ALIAS = process.env.RC_SSH_HOST || process.argv[2] || 'rc-test-host';
 const REMOTE_ISOLATED_DIR = `/tmp/omena_rc_test_${Date.now()}`;
+const RC_PASSWORD = process.env.ADMIN_PASSWORD || 'omena-rc-test-admin';
 
 function runSsh(cmdArgs) {
   return new Promise((resolve, reject) => {
@@ -145,7 +146,7 @@ export async function executeRcPipeline() {
   record(5, 'Verify /health and /ready', healthOk, step5.stdout);
 
   // Step 6: Verify authenticated /api/models, session APIs, SSE, browser, and shell workflows
-  const step6 = await runSsh([`docker exec -e TEST_URL=http://localhost:8080 -e ADMIN_PASSWORD=omena2026 omena-agent-workbench-rc node test_endpoints.js`]);
+  const step6 = await runSsh([`docker exec -e TEST_URL=http://localhost:8080 -e ADMIN_PASSWORD=${RC_PASSWORD} omena-agent-workbench-rc node test_endpoints.js`]);
   const workflowsOk = step6.code === 0 && step6.stdout.includes('14 passed, 0 failed');
   record(6, 'Verify authenticated /api/models, session APIs, SSE, browser, and shell workflows', workflowsOk, step6.stdout.slice(-300));
 
@@ -161,7 +162,7 @@ export async function executeRcPipeline() {
       sReq.write(JSON.stringify({ title: 'RC_PERSISTENCE_VALIDATION_SESSION' }));
       sReq.end();
     });
-    req.write(JSON.stringify({ password: 'omena2026' }));
+    req.write(JSON.stringify({ password: '${RC_PASSWORD}' }));
     req.end();
   "`]);
   const sessionCreated = step7.code === 0 && step7.stdout.includes('RC_PERSISTENCE_VALIDATION_SESSION');
@@ -189,7 +190,7 @@ export async function executeRcPipeline() {
       });
       sReq.end();
     });
-    req.write(JSON.stringify({ password: 'omena2026' }));
+    req.write(JSON.stringify({ password: '${RC_PASSWORD}' }));
     req.end();
   "`]);
   const persistOk = step10.code === 0 && step10.stdout.includes('RC_PERSISTENCE_VALIDATION_SESSION');

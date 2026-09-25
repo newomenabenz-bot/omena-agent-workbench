@@ -4,7 +4,7 @@
  */
 
 const BASE_URL = process.env.TEST_URL || 'http://localhost:8080';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'omena2026';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'omena-dev-admin';
 
 let sessionCookie = '';
 
