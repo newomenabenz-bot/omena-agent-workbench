@@ -40,8 +40,13 @@ export async function publishV410() {
   console.log(`📦 Target Repository: ${repoOwner}/${repoName}`);
   console.log('======================================================================\n');
 
+  const author = {
+    name: 'OMENA Release Engineer',
+    email: 'newomenabenz@gmail.com'
+  };
+
   // 1. Stage all modified and untracked files
-  console.log('▶ [1/9] Staging all release files...');
+  console.log('▶ [1/9] Checking and staging release files...');
   const matrix = await git.statusMatrix({ fs, dir: REPO_DIR });
   const modifiedOrUntracked = matrix.filter(row => row[1] !== row[2] || row[2] !== row[3]);
   
@@ -51,18 +56,15 @@ export async function publishV410() {
     console.log(`  + Staged: ${filepath}`);
   }
 
-  // 2. Commit on v4.1.0-runtime
-  console.log('\n▶ [2/9] Committing v4.1.0 release...');
-  const author = {
-    name: 'OMENA Release Engineer',
-    email: 'newomenabenz@gmail.com'
-  };
-
-  const commitSha = await git.commit({
-    fs,
-    dir: REPO_DIR,
-    author,
-    message: `release: OMENA Multi-Provider AI Runtime v4.1.0 Production Release
+  // 2. Commit on v4.1.0-runtime if changes exist
+  console.log('\n▶ [2/9] Finalizing v4.1.0 release commit...');
+  let commitSha;
+  if (modifiedOrUntracked.length > 0) {
+    commitSha = await git.commit({
+      fs,
+      dir: REPO_DIR,
+      author,
+      message: `release: OMENA Multi-Provider AI Runtime v4.1.0 Production Release
 
 - Phase 0: Base Provider Adapter Contract with 14 granular connection states and 9 normalized error codes
 - Phase 1: Model Router with priority routing, capability selection (vision/tools/reasoning), and fallback chains
@@ -76,9 +78,13 @@ export async function publishV410() {
 - Phase 9: Real Multi-Turn Autonomous Tool-Calling Continuation Loop (model -> workbench execution -> loop continuation)
 - Phase 10: Sequenced Event Bus (monotonic seq numbers) and stream resumption/replay via /api/runs/:runId/events
 - Phase 11: Real UI Controls with granular status badges (CONNECTED, RATE_LIMITED, etc.) and Refresh Models button
-- Phase 12: Dual Test Suites (offline MockProviderServer + live suites) with 100% pass across 88 tests`
-  });
-  console.log(`  ✅ Committed SHA: ${commitSha}`);
+- Phase 12: Dual Test Suites (offline MockProviderServer + live suites) with 100% pass across 94 assertions`
+    });
+    console.log(`  ✅ Committed SHA: ${commitSha}`);
+  } else {
+    commitSha = await git.resolveRef({ fs, dir: REPO_DIR, ref: 'HEAD' });
+    console.log(`  ℹ️ Working directory clean. Using current HEAD commit: ${commitSha}`);
+  }
 
   // 3. Update main branch to point to this commit
   console.log('\n▶ [3/9] Updating "main" branch ref to release commit...');
@@ -91,8 +97,8 @@ export async function publishV410() {
   });
   console.log(`  ✅ main ref updated to ${commitSha}`);
 
-  // 4. Create annotated tag v4.1.0
-  console.log('\n▶ [4/9] Creating annotated tag v4.1.0...');
+  // 4. Create annotated tag v4.1.0 locally
+  console.log('\n▶ [4/9] Creating local annotated tag v4.1.0...');
   await git.annotatedTag({
     fs,
     dir: REPO_DIR,
@@ -102,8 +108,8 @@ export async function publishV410() {
     object: commitSha,
     force: true
   });
-  const tagSha = await git.resolveRef({ fs, dir: REPO_DIR, ref: 'refs/tags/v4.1.0' });
-  console.log(`  ✅ Created tag v4.1.0 (tag object SHA: ${tagSha})`);
+  const localTagSha = await git.resolveRef({ fs, dir: REPO_DIR, ref: 'refs/tags/v4.1.0' });
+  console.log(`  ✅ Created local tag v4.1.0 (SHA: ${localTagSha})`);
 
   // 5. Push main branch to GitHub
   console.log('\n▶ [5/9] Pushing branch "main" to GitHub origin...');
@@ -118,18 +124,72 @@ export async function publishV410() {
   });
   console.log('  ✅ Branch "main" pushed successfully.');
 
-  // 6. Push Tag v4.1.0 to GitHub
-  console.log('\n▶ [6/9] Pushing tag "v4.1.0" to GitHub origin...');
-  await git.push({
-    fs,
-    http,
-    dir: REPO_DIR,
-    remote: 'origin',
-    ref: 'refs/tags/v4.1.0',
-    force: true,
-    onAuth: () => ({ username: 'x-access-token', password: token })
+  // 6. Sync Annotated Tag v4.1.0 to GitHub via Git Data API
+  console.log('\n▶ [6/9] Syncing annotated tag "v4.1.0" to GitHub origin...');
+  const tagCreateRes = await fetch(`https://api.github.com/repos/${repoOwner}/${repoName}/git/tags`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `token ${token}`,
+      'User-Agent': 'OMENA-Release-Publisher',
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      tag: 'v4.1.0',
+      message: 'OMENA Multi-Provider AI Runtime v4.1.0 Production Release',
+      object: commitSha,
+      type: 'commit',
+      tagger: {
+        name: author.name,
+        email: author.email,
+        date: new Date().toISOString()
+      }
+    })
   });
-  console.log('  ✅ Tag "v4.1.0" pushed successfully.');
+
+  if (!tagCreateRes.ok) {
+    throw new Error(`Failed to create remote tag object on GitHub: ${tagCreateRes.status}`);
+  }
+  const remoteTagObj = await tagCreateRes.json();
+  const remoteTagSha = remoteTagObj.sha;
+  console.log(`  ✅ GitHub Tag Object Created: ${remoteTagSha}`);
+
+  const updateRefRes = await fetch(`https://api.github.com/repos/${repoOwner}/${repoName}/git/refs/tags/v4.1.0`, {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `token ${token}`,
+      'User-Agent': 'OMENA-Release-Publisher',
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      sha: remoteTagSha,
+      force: true
+    })
+  });
+
+  if (!updateRefRes.ok && updateRefRes.status !== 404) {
+    throw new Error(`Failed to update tag ref on GitHub: ${updateRefRes.status}`);
+  }
+  if (updateRefRes.status === 404) {
+    const createRefRes = await fetch(`https://api.github.com/repos/${repoOwner}/${repoName}/git/refs`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `token ${token}`,
+        'User-Agent': 'OMENA-Release-Publisher',
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        ref: 'refs/tags/v4.1.0',
+        sha: remoteTagSha
+      })
+    });
+    if (!createRefRes.ok) {
+      throw new Error(`Failed to create tag ref on GitHub: ${createRefRes.status}`);
+    }
+  }
+  console.log('  ✅ Tag "v4.1.0" updated on GitHub successfully.');
 
   // 7. Verify Remote State on GitHub API
   console.log('\n▶ [7/9] Verifying remote repository state via GitHub API...');
@@ -203,8 +263,8 @@ export async function publishV410() {
         clonedCommitSha = tagObj.tag.object;
       }
     } catch {}
-    if (clonedCommitSha !== commitSha && clonedHead !== tagSha) {
-      throw new Error(`Cloned commit ${clonedCommitSha} does not match release commit ${commitSha} or tag ${tagSha}`);
+    if (clonedCommitSha !== commitSha && clonedHead !== remoteTagSha) {
+      throw new Error(`Cloned commit ${clonedCommitSha} does not match release commit ${commitSha}`);
     }
     console.log(`  ✅ Verified: Tag v4.1.0 correctly targets release commit ${commitSha}`);
   } finally {
@@ -217,7 +277,7 @@ export async function publishV410() {
     version: '4.1.0',
     releaseType: 'production',
     commitSha,
-    tagSha,
+    tagSha: remoteTagSha,
     tag: 'v4.1.0',
     repository: `https://github.com/${repoOwner}/${repoName}`,
     publishedAt: new Date().toISOString(),
@@ -259,7 +319,7 @@ export async function publishV410() {
   console.log('🎉 OMENA MULTI-PROVIDER AI RUNTIME v4.1.0 RELEASE COMPLETE & VERIFIED');
   console.log(`   Repository: https://github.com/${repoOwner}/${repoName}`);
   console.log(`   Branch:     main -> ${commitSha}`);
-  console.log(`   Tag:        v4.1.0 -> ${tagSha}`);
+  console.log(`   Tag:        v4.1.0 -> ${remoteTagSha}`);
   console.log('======================================================================\n');
 
   return manifest;
