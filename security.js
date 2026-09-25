@@ -75,15 +75,18 @@ export class SecurityGuard {
 
   /**
    * Command safety and directory containment guardrail
+   * Evaluates command safety based on explicit execution mode and privilege level
    */
-  static validateCommand(command, workspaceRoot = '') {
+  static validateCommand(command, context = {}) {
     if (!command || typeof command !== 'string') {
       return { allowed: false, reason: 'Empty command' };
     }
 
     const trimmed = command.trim();
+    const isHostAdmin = (typeof context === 'object' && context.executionMode === 'host' && context.executionPrivilege === 'admin') ||
+                        (process.env.EXECUTION_MODE === 'host' && process.env.EXECUTION_PRIVILEGE === 'admin');
 
-    // 1. Check for blacklisted destructive operations
+    // 1. Blacklisted catastrophic destructive operations are ALWAYS enforced, even in host/admin mode
     for (const pattern of BLOCKED_COMMAND_PATTERNS) {
       if (pattern.test(trimmed)) {
         return {
@@ -93,25 +96,26 @@ export class SecurityGuard {
       }
     }
 
-    // 2. Check for directory traversal attempts (e.g., ../ or ..\)
-    if (/(?:^|\s|["'])(?:\.\.[\/\\]|\.\.$)/.test(trimmed) || trimmed.includes('../../')) {
-      return {
-        allowed: false,
-        reason: 'Path Escape Guardrail: Directory traversal (..) outside scoped workspace environment is prohibited.'
-      };
-    }
-
-    // 3. Check for unauthorized access to sensitive host/system paths
-    for (const pattern of SENSITIVE_PATH_PATTERNS) {
-      if (pattern.test(trimmed)) {
+    // 2. Directory traversal & sandbox constraints apply to container mode
+    if (!isHostAdmin) {
+      if (/(?:^|\s|["'])(?:\.\.[\/\\]|\.\.$)/.test(trimmed) || trimmed.includes('../../')) {
         return {
           allowed: false,
-          reason: `Path Escape Guardrail: Access to sensitive system path matching [${pattern.toString()}] is strictly prohibited.`
+          reason: 'Path Escape Guardrail: Directory traversal (..) outside scoped workspace environment is prohibited.'
         };
+      }
+
+      for (const pattern of SENSITIVE_PATH_PATTERNS) {
+        if (pattern.test(trimmed)) {
+          return {
+            allowed: false,
+            reason: `Path Escape Guardrail: Access to sensitive system path matching [${pattern.toString()}] is strictly prohibited.`
+          };
+        }
       }
     }
 
-    return { allowed: true };
+    return { allowed: true, mode: isHostAdmin ? 'host_admin' : 'container' };
   }
 
   static validateSafeCommand(command, workspaceRoot = '') {

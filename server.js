@@ -97,12 +97,14 @@ const server = http.createServer(async (req, res) => {
   // --- Operational Endpoints (Public) ---
   if (pathname === '/health' && req.method === 'GET') {
     const isDbHealthy = db.healthCheck();
+    const execIdentity = engine.orchestrator.workbench.getExecutionIdentity();
     sendJson(res, isDbHealthy ? 200 : 503, {
       status: isDbHealthy ? 'ok' : 'degraded',
       uptime: process.uptime(),
       db: isDbHealthy ? 'connected' : 'error',
-      executionMode: process.env.EXECUTION_MODE || 'container',
-      executionPrivilege: process.env.EXECUTION_PRIVILEGE || 'standard',
+      executionMode: execIdentity.mode,
+      executionPrivilege: execIdentity.privilege,
+      executionIdentity: execIdentity,
       memory: process.memoryUsage(),
       timestamp: new Date().toISOString()
     });
@@ -117,12 +119,14 @@ const server = http.createServer(async (req, res) => {
         : '/tmp/DevToolsActivePort'
     );
     const chromeActive = fs.existsSync(portFile);
+    const execIdentity = engine.orchestrator.workbench.getExecutionIdentity();
     sendJson(res, 200, {
       ready: true,
       database: isDbHealthy,
       browser: { active: chromeActive },
-      executionMode: process.env.EXECUTION_MODE || 'container',
-      executionPrivilege: process.env.EXECUTION_PRIVILEGE || 'standard',
+      executionMode: execIdentity.mode,
+      executionPrivilege: execIdentity.privilege,
+      executionIdentity: execIdentity,
       port: PORT,
       timestamp: new Date().toISOString()
     });

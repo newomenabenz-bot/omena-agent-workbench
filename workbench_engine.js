@@ -48,11 +48,29 @@ export class AgenticWorkbench {
   }
 
   resolveWorkspacePath(relPath) {
+    const isHostAdmin = this.executionMode === 'host' && this.executionPrivilege === 'admin';
     const resolved = path.resolve(this.workspaceRoot, relPath || '');
-    if (!resolved.startsWith(this.workspaceRoot)) {
+    if (!isHostAdmin && !resolved.startsWith(this.workspaceRoot)) {
       throw new Error(`Security Exception: Access denied outside workspace root: ${relPath}`);
     }
     return resolved;
+  }
+
+  getExecutionIdentity() {
+    let user = 'unknown';
+    try {
+      const os = require('os');
+      user = os.userInfo().username;
+    } catch {}
+    return {
+      mode: this.executionMode,
+      privilege: this.executionPrivilege,
+      user,
+      platform: process.platform,
+      arch: process.arch,
+      pid: process.pid,
+      isRoot: typeof process.getuid === 'function' ? process.getuid() === 0 : false
+    };
   }
 
   // -------------------------------------------------------------
@@ -162,7 +180,10 @@ export class AgenticWorkbench {
           const timeout = options.timeout || 60000;
 
           // Guardrail check
-          const validation = SecurityGuard.validateSafeCommand(command);
+          const validation = SecurityGuard.validateSafeCommand(command, {
+            executionMode: this.executionMode,
+            executionPrivilege: this.executionPrivilege
+          });
           if (!validation.allowed) {
             return resolve({
               type: 'tool.result',
