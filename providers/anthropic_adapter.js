@@ -113,34 +113,25 @@ export class AnthropicAdapter extends BaseProviderAdapter {
     }
   }
 
+  /**
+   * Anthropic Model Capability Resolver (v1)
+   * Resolves capabilities separately from availability. Availability is strictly live from provider.
+   */
+  resolveModelCapabilities(modelId) {
+    const isSonnetOrOpus = modelId.includes('sonnet') || modelId.includes('opus');
+    const isReasoning = modelId.includes('3-7') || modelId.includes('thinking');
+    return {
+      streaming: true,
+      tools: true,
+      vision: isSonnetOrOpus,
+      reasoning: isReasoning,
+      contextWindow: 200000
+    };
+  }
+
   async discoverModels(credential) {
     const key = credential?.anthropic || credential?.claudeKey || credential?.apiKey || (typeof credential === 'string' ? credential : null) || process.env.ANTHROPIC_API_KEY;
-    const staticList = [
-      {
-        id: 'claude-3-5-sonnet',
-        name: 'Claude 3.5 Sonnet',
-        provider: 'anthropic',
-        providerName: 'Anthropic Claude',
-        contextWindow: 200000,
-        streaming: true,
-        tools: true,
-        vision: true,
-        reasoning: false
-      },
-      {
-        id: 'claude-3-5-haiku',
-        name: 'Claude 3.5 Haiku',
-        provider: 'anthropic',
-        providerName: 'Anthropic Claude',
-        contextWindow: 200000,
-        streaming: true,
-        tools: true,
-        vision: false,
-        reasoning: false
-      }
-    ];
-
-    if (!key) return staticList;
+    if (!key || typeof key !== 'string' || !key.trim()) return [];
 
     try {
       const endpoint = `${this.baseUrl}/models?limit=50`;
@@ -148,28 +139,34 @@ export class AnthropicAdapter extends BaseProviderAdapter {
         headers: {
           'x-api-key': key.trim(),
           'anthropic-version': '2023-06-01',
-          'User-Agent': 'OMENA-Agent-Workbench/4.1.0'
+          'User-Agent': 'OMENA-Agent-Workbench/4.1.1'
         },
         signal: AbortSignal.timeout(12000)
       });
-      if (!res.ok) return staticList;
+      if (!res.ok) return [];
       const data = await res.json();
-      if (!data.data || !Array.isArray(data.data)) return staticList;
+      if (!data.data || !Array.isArray(data.data)) return [];
 
-      return data.data.map(m => ({
-        id: m.id,
-        name: m.display_name || m.id,
-        provider: 'anthropic',
-        providerName: 'Anthropic Claude',
-        contextWindow: 200000,
-        streaming: true,
-        tools: true,
-        vision: m.id.includes('sonnet') || m.id.includes('opus'),
-        reasoning: false,
-        discovered: true
-      }));
+      const now = new Date().toISOString();
+
+      return data.data.map(m => {
+        const caps = this.resolveModelCapabilities(m.id);
+        return {
+          id: m.id,
+          name: m.display_name || `Anthropic ${m.id}`,
+          provider: 'anthropic',
+          providerName: 'Anthropic Claude',
+          ...caps,
+          source: 'provider_discovery',
+          discoveredAt: now,
+          lastValidatedAt: now,
+          available: true,
+          verified: true,
+          discovered: true
+        };
+      });
     } catch {
-      return staticList;
+      return [];
     }
   }
 

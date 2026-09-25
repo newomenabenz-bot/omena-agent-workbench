@@ -1,7 +1,8 @@
 /**
- * OMENA Model Router & Fallback Chain Manager v4.1.0
- * Handles priority routing, capability selection, explicit fallback chains,
- * and logged provider transitions.
+ * OMENA Model Router & Fallback Chain Manager v4.1.1
+ * Dynamically constructs candidates from:
+ * configured credentials + live provider health + live discovered models + required capabilities
+ * Enforces explicit, auditable provider transitions with zero silent switching.
  */
 
 import { modelRegistry } from './model_registry.js';
@@ -18,11 +19,10 @@ export class ModelRouter {
   }
 
   initDefaultFallbackChains() {
-    // Configured fallback chains for common models
     this.fallbackChains.set('gemini-2.0-flash', ['gpt-4o', 'claude-3-5-sonnet', 'local-gguf']);
     this.fallbackChains.set('gpt-4o', ['gemini-2.0-flash', 'claude-3-5-sonnet', 'local-gguf']);
     this.fallbackChains.set('claude-3-5-sonnet', ['gemini-2.0-flash', 'gpt-4o', 'local-gguf']);
-    this.fallbackChains.set('deepseek-r1', ['o3-mini', 'gemini-2.0-flash-thinking-exp', 'deepseek-chat']);
+    this.fallbackChains.set('deepseek-reasoner', ['o3-mini', 'gemini-2.0-flash-thinking-exp']);
     this.fallbackChains.set('o3-mini', ['deepseek-reasoner', 'gemini-2.0-flash-thinking-exp']);
   }
 
@@ -34,16 +34,14 @@ export class ModelRouter {
     return this.fallbackChains.get(modelId) || [];
   }
 
-  logTransition(fromModel, toModel, reason, details = {}) {
+  logTransition(record) {
     const entry = {
-      fromModel,
-      toModel,
-      reason,
-      details,
+      event: 'provider.transition',
+      ...record,
       timestamp: Date.now()
     };
     this.transitionLogs.push(entry);
-    if (this.transitionLogs.length > 100) {
+    if (this.transitionLogs.length > 200) {
       this.transitionLogs.shift();
     }
     return entry;
@@ -54,37 +52,92 @@ export class ModelRouter {
   }
 
   /**
-   * Route request to primary adapter or fallback chain
+   * Dynamically constructs eligible live candidate models
+   * Based on live health, discovered models, and capability requirements
    */
-  async executeWithRouting({ model, prompt, messages, tools, credentials, emit, signal }) {
-    const attemptedModels = [];
-    const chain = [model, ...(this.getFallbackChain(model))];
+  findEligibleCandidates({ requirements = {}, credentials = {} }) {
+    // 1. Get all live discovered models matching requirements
+    const discoveredMatching = modelRegistry.filterByCapabilities({
+      ...requirements,
+      includeBootstrap: false // STRICT: Live discovered only
+    });
 
-    let lastError = null;
-
-    for (let i = 0; i < chain.length; i++) {
-      const candidateModel = chain[i];
-      attemptedModels.push(candidateModel);
-
-      const adapter = this.adapterManager.getAdapter(candidateModel);
+    // 2. Filter to providers that have credentials and are in an eligible state
+    const eligible = [];
+    for (const model of discoveredMatching) {
+      const adapter = this.adapterManager.getAdapter(model.id);
       if (!adapter) continue;
 
-      if (i > 0) {
-        const transition = this.logTransition(chain[i - 1], candidateModel, 'FALLBACK_TRIGGERED', {
-          lastError: lastError?.message,
-          attempt: i
-        });
-        emit({
-          type: 'provider.transition',
-          from: transition.fromModel,
-          to: transition.toModel,
-          reason: transition.reason,
-          message: `Routing fallback from ${transition.fromModel} to ${transition.toModel}`
-        });
-      }
+      const providerKey = model.provider;
+      const hasCred = credentials[providerKey] || credentials[`${providerKey}Key`] || process.env[`${providerKey.toUpperCase()}_API_KEY`] || providerKey === 'local';
+      
+      const eligibleStates = [
+        ConnectionState.CONNECTED,
+        ConnectionState.READY,
+        ConnectionState.AUTHENTICATED,
+        ConnectionState.MODEL_DISCOVERED
+      ];
 
+      const isLiveState = eligibleStates.includes(adapter.connectionState);
+
+      if (hasCred && (isLiveState || adapter.connectionState === ConnectionState.VALIDATING || adapter.connectionState === ConnectionState.NOT_CONFIGURED)) {
+        eligible.push(model);
+      }
+    }
+
+    // 3. Sort by priority policy
+    eligible.sort((a, b) => {
+      const pA = this.defaultPriority.indexOf(a.provider);
+      const pB = this.defaultPriority.indexOf(b.provider);
+      return (pA === -1 ? 999 : pA) - (pB === -1 ? 999 : pB);
+    });
+
+    return eligible;
+  }
+
+  /**
+   * Capability-based model selector (strictly live discovered)
+   */
+  selectModelForCapabilities(requirements = {}, credentials = {}) {
+    const eligible = this.findEligibleCandidates({ requirements, credentials });
+    if (eligible.length === 0) {
+      // If no live discovered models exist yet, return null
+      return null;
+    }
+    return eligible[0].id;
+  }
+
+  /**
+   * Execute with dynamic fallback routing & auditable transition events
+   */
+  async executeWithRouting({ model, prompt, messages, tools, credentials, emit, signal }) {
+    let currentModel = model;
+    let currentAdapter = this.adapterManager.getAdapter(currentModel);
+
+    // If adapter not found for model ID, try to find an eligible model
+    if (!currentAdapter) {
+      const requiredCaps = {
+        tools: Boolean(tools && tools.length > 0)
+      };
+      const candidateId = this.selectModelForCapabilities(requiredCaps, credentials);
+      if (candidateId) {
+        currentModel = candidateId;
+        currentAdapter = this.adapterManager.getAdapter(currentModel);
+      }
+    }
+
+    if (!currentAdapter) {
+      throw new WorkbenchError(ErrorCode.MODEL_NOT_FOUND, `No provider adapter found for requested model '${model}'`);
+    }
+
+    const attemptedModels = [currentModel];
+    let lastError = null;
+
+    // Retry loop with explicit transition logging
+    const maxAttempts = 3;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        await adapter.streamChat({
+        await currentAdapter.streamChat({
           prompt,
           messages,
           tools,
@@ -92,15 +145,15 @@ export class ModelRouter {
           emit,
           signal
         });
-        return { success: true, modelUsed: candidateModel, attemptedModels };
+        return { success: true, modelUsed: currentModel, attemptedModels };
       } catch (err) {
         lastError = err;
-        // If user cancelled, don't fallback
+
         if (err.name === 'AbortError' || signal?.aborted) {
           throw err;
         }
-        // Normalize error and check if we should attempt fallback
-        const normalized = adapter.normalizeError(err);
+
+        const normalized = currentAdapter.normalizeError(err);
         const retryable = [
           ErrorCode.RATE_LIMITED,
           ErrorCode.PROVIDER_UNAVAILABLE,
@@ -109,29 +162,74 @@ export class ModelRouter {
           ErrorCode.QUOTA_EXCEEDED
         ].includes(normalized.code);
 
-        if (!retryable || i === chain.length - 1) {
+        if (!retryable || attempt === maxAttempts - 1) {
           throw normalized;
         }
+
+        // Determine fallback requirements
+        const reqs = {
+          tools: Boolean(tools && tools.length > 0)
+        };
+
+        // Find candidate models from explicit fallback chain first, then live eligible discovery
+        const configuredChain = this.getFallbackChain(currentModel);
+        let nextModel = null;
+
+        for (const candidate of configuredChain) {
+          if (!attemptedModels.includes(candidate)) {
+            const candAdapter = this.adapterManager.getAdapter(candidate);
+            if (candAdapter && candAdapter.connectionState !== ConnectionState.AUTH_FAILED && candAdapter.connectionState !== ConnectionState.DISCONNECTED) {
+              nextModel = candidate;
+              break;
+            }
+          }
+        }
+
+        // If configured chain exhausted, discover eligible live candidates
+        if (!nextModel) {
+          const liveEligible = this.findEligibleCandidates({ requirements: reqs, credentials });
+          for (const cand of liveEligible) {
+            if (!attemptedModels.includes(cand.id)) {
+              nextModel = cand.id;
+              break;
+            }
+          }
+        }
+
+        if (!nextModel) {
+          throw normalized;
+        }
+
+        const nextAdapter = this.adapterManager.getAdapter(nextModel);
+        if (!nextAdapter) {
+          throw normalized;
+        }
+
+        // Log and emit auditable transition event
+        const transitionRecord = {
+          event: 'provider.transition',
+          fromProvider: currentAdapter.name,
+          fromModel: currentModel,
+          toProvider: nextAdapter.name,
+          toModel: nextModel,
+          reason: normalized.code,
+          policy: configuredChain.includes(nextModel) ? 'configured-fallback-chain' : 'live-eligible-fallback'
+        };
+
+        this.logTransition(transitionRecord);
+
+        emit({
+          type: 'provider.transition',
+          ...transitionRecord,
+          message: `Provider fallback: Switched from ${currentAdapter.name} (${currentModel}) to ${nextAdapter.name} (${nextModel}) due to ${normalized.code}`
+        });
+
+        currentModel = nextModel;
+        currentAdapter = nextAdapter;
+        attemptedModels.push(currentModel);
       }
     }
 
-    throw lastError || new WorkbenchError(ErrorCode.PROVIDER_UNAVAILABLE, 'All models in routing chain failed');
-  }
-
-  /**
-   * Capability-based model selector
-   */
-  selectModelForCapabilities(requirements = {}) {
-    const candidates = modelRegistry.filterByCapabilities(requirements);
-    if (candidates.length === 0) return null;
-
-    // Sort by priority provider
-    candidates.sort((a, b) => {
-      const pA = this.defaultPriority.indexOf(a.provider);
-      const pB = this.defaultPriority.indexOf(b.provider);
-      return (pA === -1 ? 999 : pA) - (pB === -1 ? 999 : pB);
-    });
-
-    return candidates[0].id;
+    throw lastError || new WorkbenchError(ErrorCode.PROVIDER_UNAVAILABLE, 'Routing fallback chain exhausted without successful completion');
   }
 }

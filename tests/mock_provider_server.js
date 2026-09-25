@@ -1,7 +1,12 @@
 /**
- * OMENA Mock Provider Server v4.1.0
- * Lightweight HTTP server implementing real wire protocols for Gemini, OpenAI,
- * Claude, DeepSeek, and Local AI for offline deterministic contract testing.
+ * OMENA Mock Provider Server v4.1.1
+ * Lightweight HTTP server implementing real wire protocols for:
+ * 1. Native Google Gemini (:streamGenerateContent?alt=sse, /models?key=)
+ * 2. OpenAI (/v1/chat/completions, /v1/models)
+ * 3. Anthropic Messages API (/v1/messages, /v1/models)
+ * 4. DeepSeek (/v1/chat/completions)
+ * 5. Local Ollama (/api/version, /api/tags, /api/chat)
+ * Used for deterministic offline contract verification.
  */
 
 import http from 'http';
@@ -52,7 +57,73 @@ export class MockProviderServer {
             return;
           }
 
-          // 1. Google Gemini endpoints
+          // 1. Google Gemini Native (:streamGenerateContent)
+          if (req.url.includes(':streamGenerateContent')) {
+            const keyMatch = req.url.match(/key=([^&]+)/);
+            const key = keyMatch ? keyMatch[1] : '';
+            if (key === 'invalid-key') {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: { message: 'API key not valid' } }));
+              return;
+            }
+
+            res.writeHead(200, {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive'
+            });
+
+            if (this.simulatedToolCall) {
+              const tcChunk = {
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        {
+                          functionCall: {
+                            name: this.simulatedToolCall.name,
+                            args: this.simulatedToolCall.arguments || {}
+                          }
+                        }
+                      ]
+                    },
+                    finishReason: 'STOP'
+                  }
+                ],
+                usageMetadata: { promptTokenCount: 15, candidatesTokenCount: 10, totalTokenCount: 25 }
+              };
+              res.write(`data: ${JSON.stringify(tcChunk)}\n\n`);
+            } else {
+              const chunk1 = {
+                candidates: [
+                  {
+                    content: {
+                      parts: [{ text: 'Native Gemini stream chunk 1. ' }]
+                    }
+                  }
+                ]
+              };
+              const chunk2 = {
+                candidates: [
+                  {
+                    content: {
+                      parts: [{ text: 'Native generation completed.' }]
+                    },
+                    finishReason: 'STOP'
+                  }
+                ],
+                usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 8, totalTokenCount: 18 }
+              };
+              res.write(`data: ${JSON.stringify(chunk1)}\n\n`);
+              res.write(`data: ${JSON.stringify(chunk2)}\n\n`);
+            }
+
+            res.write('data: [DONE]\n\n');
+            res.end();
+            return;
+          }
+
+          // 2. Google Gemini Models discovery
           if (req.url.includes('/models?key=')) {
             const keyMatch = req.url.match(/key=([^&]+)/);
             const key = keyMatch ? keyMatch[1] : '';
@@ -71,8 +142,8 @@ export class MockProviderServer {
             return;
           }
 
+          // 3. OpenAI & OpenAI-compatible Chat Completions
           if (req.url.includes('/openai/chat/completions') || (req.url.includes('/chat/completions') && !req.url.includes('deepseek'))) {
-            // Check auth header
             const auth = req.headers.authorization || '';
             if (auth.includes('invalid')) {
               res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -117,7 +188,7 @@ export class MockProviderServer {
             return;
           }
 
-          // 2. OpenAI /v1/models
+          // 4. OpenAI / DeepSeek / Local /v1/models
           if (req.url === '/v1/models' || req.url === '/models') {
             const auth = req.headers.authorization || req.headers['x-api-key'] || '';
             if (auth.includes('invalid')) {
@@ -138,7 +209,7 @@ export class MockProviderServer {
             return;
           }
 
-          // 3. Anthropic Messages API
+          // 5. Anthropic Messages API
           if (req.url === '/v1/messages' || req.url === '/messages') {
             const apiKey = req.headers['x-api-key'] || '';
             if (apiKey.includes('invalid')) {
@@ -166,12 +237,26 @@ export class MockProviderServer {
             return;
           }
 
-          // 4. Local Ollama endpoints
+          // 6. Local Ollama endpoints
+          if (req.url === '/api/version') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ version: '0.5.1' }));
+            return;
+          }
+
           if (req.url === '/api/tags') {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
               models: [{ name: 'llama3:latest' }, { name: 'codellama:latest' }]
             }));
+            return;
+          }
+
+          if (req.url === '/api/chat') {
+            res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+            res.write(JSON.stringify({ message: { content: 'Local Ollama chunk 1. ' } }) + '\n');
+            res.write(JSON.stringify({ message: { content: 'Finished.' }, done: true }) + '\n');
+            res.end();
             return;
           }
 

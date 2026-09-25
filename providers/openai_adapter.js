@@ -102,6 +102,25 @@ export class OpenAIAdapter extends BaseProviderAdapter {
     }
   }
 
+  /**
+   * OpenAI Capability Resolver
+   * Resolves capabilities dynamically from model ID and architecture patterns
+   */
+  resolveModelCapabilities(modelId) {
+    const isReasoning = modelId.startsWith('o1') || modelId.startsWith('o3') || modelId.includes('reasoning');
+    const isVision = modelId.includes('4o') || modelId.includes('4-turbo') || modelId.includes('vision') || (modelId.startsWith('o1') && !modelId.includes('mini'));
+    const isTools = !modelId.includes('instruct') && !modelId.startsWith('o1-preview') && !modelId.startsWith('o1-mini');
+    const contextWindow = isReasoning ? 200000 : (modelId.includes('4o') ? 128000 : 16384);
+
+    return {
+      streaming: true,
+      tools: isTools,
+      vision: isVision,
+      reasoning: isReasoning,
+      contextWindow
+    };
+  }
+
   async discoverModels(apiKey) {
     const cleanKey = (apiKey || '').trim();
     if (!cleanKey) return [];
@@ -110,7 +129,7 @@ export class OpenAIAdapter extends BaseProviderAdapter {
       const res = await fetch(endpoint, {
         headers: {
           'Authorization': `Bearer ${cleanKey}`,
-          'User-Agent': 'OMENA-Agent-Workbench/4.1.0'
+          'User-Agent': 'OMENA-Agent-Workbench/4.1.1'
         },
         signal: AbortSignal.timeout(12000)
       });
@@ -118,21 +137,24 @@ export class OpenAIAdapter extends BaseProviderAdapter {
       const data = await res.json();
       if (!data.data || !Array.isArray(data.data)) return [];
 
-      const relevant = ['gpt-4o', 'gpt-4o-mini', 'o1', 'o1-mini', 'o3-mini', 'gpt-4-turbo'];
+      const nonChatPrefixes = ['text-embedding', 'whisper', 'dall-e', 'tts', 'babbage', 'davinci', 'curie', 'omni-moderation', 'canary'];
+      const now = new Date().toISOString();
+
       return data.data
-        .filter(m => relevant.includes(m.id) || m.id.startsWith('gpt-4o') || m.id.startsWith('o3'))
+        .filter(m => !nonChatPrefixes.some(p => m.id.startsWith(p)))
         .map(m => {
-          const isReasoning = m.id.startsWith('o1') || m.id.startsWith('o3');
+          const caps = this.resolveModelCapabilities(m.id);
           return {
             id: m.id,
             name: `OpenAI ${m.id}`,
             provider: 'openai',
-            providerName: 'OpenAI ChatGPT',
-            streaming: true,
-            tools: true,
-            vision: !isReasoning,
-            reasoning: isReasoning,
-            contextWindow: isReasoning ? 200000 : 128000,
+            providerName: 'OpenAI API',
+            ...caps,
+            source: 'provider_discovery',
+            discoveredAt: now,
+            lastValidatedAt: now,
+            available: true,
+            verified: true,
             discovered: true
           };
         });

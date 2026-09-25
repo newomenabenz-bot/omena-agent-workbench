@@ -144,13 +144,14 @@ async function runTests() {
 
       const validation = await gemini.validateConnection('test-gemini-key');
       assert.strictEqual(validation.valid, true);
-      assert.strictEqual(validation.state, ConnectionState.CONNECTED);
-      assert.strictEqual(gemini.getConnectionState(), ConnectionState.CONNECTED);
+      assert.strictEqual(validation.state, ConnectionState.AUTHENTICATED);
+      assert.strictEqual(gemini.getConnectionState(), ConnectionState.AUTHENTICATED);
 
       const models = await gemini.discoverModels('test-gemini-key');
       assert.ok(Array.isArray(models));
       assert.strictEqual(models.length, 2);
       assert.strictEqual(models[0].id, 'gemini-2.0-flash');
+      assert.strictEqual(models[0].source, 'provider_discovery');
 
       // Test invalid key
       const invalidValidation = await gemini.validateConnection('invalid-key');
@@ -172,7 +173,7 @@ async function runTests() {
       });
 
       assert.ok(receivedTokens.length >= 2);
-      assert.strictEqual(receivedTokens.join(''), 'Mock provider stream chunk 1. Operation completed successfully.');
+      assert.strictEqual(receivedTokens.join(''), 'Native Gemini stream chunk 1. Native generation completed.');
       assert.strictEqual(gemini.telemetry.requestCount, 1);
       assert.ok(gemini.telemetry.latency.ttft >= 0);
     });
@@ -248,11 +249,12 @@ async function runTests() {
       const local = new LocalAdapter('local-gguf');
       const val = await local.validateConnection({ local: mockBaseUrl });
       assert.strictEqual(val.valid, true);
-      assert.strictEqual(val.state, ConnectionState.CONNECTED);
+      assert.ok(val.state === ConnectionState.MODEL_DISCOVERED || val.state === ConnectionState.READY);
 
       const models = await local.discoverModels({ local: mockBaseUrl });
       assert.ok(models.length >= 2);
       assert.strictEqual(models[0].id, 'local-llama3:latest');
+      assert.strictEqual(models[0].source, 'provider_discovery');
 
       // Unreachable port check
       const unreachable = await local.validateConnection({ local: 'http://127.0.0.1:59999' });
@@ -266,17 +268,26 @@ async function runTests() {
     console.log('\n--- Group 3: Model Router & Capability Selection ---');
 
     await test('ModelRouter selects appropriate model by capabilities', () => {
-      const router = new ModelRouter(adapterManager);
-      const reasoningModel = router.selectModelForCapabilities({ reasoning: true });
-      assert.ok(reasoningModel === 'gemini-2.0-flash-thinking-exp' || reasoningModel === 'o3-mini' || reasoningModel.includes('reasoner') || reasoningModel.includes('r1'));
+      // Register discovered models with provenance
+      modelRegistry.registerDiscovered('gemini', [
+        { id: 'gemini-2.0-flash-thinking-exp', provider: 'gemini', reasoning: true, vision: true, tools: true, contextWindow: 1048576 },
+        { id: 'gemini-2.0-flash', provider: 'gemini', reasoning: false, vision: true, tools: true, contextWindow: 1048576 }
+      ]);
+      modelRegistry.registerDiscovered('openai', [
+        { id: 'gpt-4o', provider: 'openai', reasoning: false, vision: true, tools: true, contextWindow: 128000 }
+      ]);
 
-      const visionModel = router.selectModelForCapabilities({ vision: true });
-      assert.ok(visionModel.includes('flash') || visionModel.includes('gpt-4o') || visionModel.includes('sonnet'));
+      const router = new ModelRouter(adapterManager);
+      const reasoningModel = router.selectModelForCapabilities({ reasoning: true }, { gemini: 'test-key' });
+      assert.strictEqual(reasoningModel, 'gemini-2.0-flash-thinking-exp');
+
+      const visionModel = router.selectModelForCapabilities({ vision: true }, { gemini: 'test-key' });
+      assert.ok(visionModel.includes('flash') || visionModel.includes('gpt-4o'));
     });
 
     await test('ModelRouter transitions between models on retryable errors and logs sequence', async () => {
       const router = new ModelRouter(adapterManager);
-      const log = router.logTransition('gemini-2.0-flash', 'gpt-4o', 'RATE_LIMITED', { latencyMs: 320 });
+      const log = router.logTransition({ fromModel: 'gemini-2.0-flash', toModel: 'gpt-4o', reason: 'RATE_LIMITED', details: { latencyMs: 320 } });
       assert.strictEqual(log.fromModel, 'gemini-2.0-flash');
       assert.strictEqual(log.toModel, 'gpt-4o');
       assert.strictEqual(log.reason, 'RATE_LIMITED');

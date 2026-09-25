@@ -1,0 +1,115 @@
+{
+  "version": "4.1.1-rc.1",
+  "releaseType": "release-candidate",
+  "tag": "v4.1.1-rc.1",
+  "repository": "https://github.com/newomenabenz-bot/omena-agent-workbench",
+  "publishedAt": "2026-09-25T17:10:00.000Z",
+  "executionMode": "container",
+  "executionPrivilege": "standard",
+  "modelDiscovery": {
+    "providerAuthoritative": true,
+    "provenanceRequired": true,
+    "staticBootstrapExclusion": true
+  },
+  "protocols": {
+    "gemini": {
+      "native": true,
+      "default": "gemini-native",
+      "openAICompatibleFallbackAvailable": true
+    },
+    "openai": {
+      "liveModelDiscovery": true,
+      "staleFilterRemoved": true,
+      "capabilityResolver": true
+    },
+    "anthropic": {
+      "liveModelDiscovery": true,
+      "capabilityMapVersion": "v1"
+    },
+    "deepseek": {
+      "liveModelDiscovery": true,
+      "obsoleteAliasesRemoved": true
+    },
+    "local": {
+      "states": [
+        "NOT_CONFIGURED",
+        "CONFIGURED",
+        "REACHABLE",
+        "MODEL_DISCOVERED",
+        "READY"
+      ],
+      "daemonHealthChecked": true
+    }
+  },
+  "router": {
+    "liveHealthAware": true,
+    "eligibleDiscoveryOnly": true,
+    "auditableTransitions": true,
+    "transitionEvent": "provider.transition"
+  },
+  "security": {
+    "secretsEncryptedAtRest": true,
+    "encryptionAlgorithm": "AES-256-GCM",
+    "sqliteSchemaVersion": 2,
+    "redactedFromLogs": true,
+    "ssrfGuardrail": true
+  },
+  "testVerification": {
+    "offlineContractTests": {
+      "passed": 20,
+      "failed": 0,
+      "status": "PASS"
+    },
+    "adapterUnitTests": {
+      "passed": 24,
+      "failed": 0,
+      "status": "PASS"
+    },
+    "endpointIntegrationTests": {
+      "passed": 21,
+      "failed": 0,
+      "status": "PASS"
+    },
+    "cleanRoomPersistenceTests": {
+      "passed": 17,
+      "failed": 0,
+      "status": "PASS"
+    },
+    "browserE2ETests": {
+      "passed": 8,
+      "failed": 0,
+      "status": "PASS"
+    },
+    "autonomousDevE2ETests": {
+      "passed": 6,
+      "failed": 0,
+      "status": "PASS"
+    },
+    "totalOfflineTests": 96,
+    "totalOfflinePassed": 96,
+    "totalOfflineFailed": 0,
+    "offlinePassRate": "100%",
+    "liveProviderTests": {
+      "gemini": {
+        "status": "NOT_RUN",
+        "reason": "Requires real API key validation via VPS or LIVE_GEMINI=1"
+      },
+      "openai": {
+        "status": "NOT_RUN",
+        "reason": "Requires real API key validation via VPS or LIVE_OPENAI=1"
+      },
+      "anthropic": {
+        "status": "NOT_RUN",
+        "reason": "Requires real API key validation via VPS or LIVE_ANTHROPIC=1"
+      },
+      "deepseek": {
+        "status": "NOT_RUN",
+        "reason": "Requires real API key validation via VPS or LIVE_DEEPSEEK=1"
+      },
+      "local": {
+        "status": "NOT_RUN",
+        "reason": "Requires real local daemon or LIVE_LOCAL=1"
+      }
+    }
+  }
+}

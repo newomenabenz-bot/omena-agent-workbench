@@ -209,19 +209,43 @@
       if (data && data.models) {
         availableModels = data.models;
         if (elements.selectModel) {
-          const savedModel = localStorage.getItem('omena_model') || data.default || 'gemini-2.0-flash';
-          elements.selectModel.innerHTML = availableModels.map(m => {
-            const caps = [];
-            if (m.tools) caps.push('Tools');
-            if (m.vision) caps.push('Vision');
-            if (m.reasoning) caps.push('Reasoning');
-            const capStr = caps.length > 0 ? ` [${caps.join(', ')}]` : '';
-            const selected = m.id === savedModel ? ' selected' : '';
-            return `<option value="${m.id}"${selected}>${m.name} (${m.id})${capStr}</option>`;
-          }).join('');
+          const savedModel = localStorage.getItem('omena_model');
+          const liveModels = availableModels.filter(m => m.available && m.source === 'provider_discovery');
+          const bootstrapModels = availableModels.filter(m => m.source === 'static_bootstrap');
 
-          elements.selectModel.value = savedModel;
-          updateSystemStatus(savedModel);
+          let html = '';
+          if (liveModels.length > 0) {
+            html += `<optgroup label="✅ Discovered Live Models (${liveModels.length})">`;
+            html += liveModels.map(m => {
+              const caps = [];
+              if (m.tools) caps.push('Tools');
+              if (m.vision) caps.push('Vision');
+              if (m.reasoning) caps.push('Reasoning');
+              const capStr = caps.length > 0 ? ` [${caps.join(', ')}]` : '';
+              const selected = m.id === savedModel ? ' selected' : '';
+              return `<option value="${m.id}"${selected}>${m.name} (${m.id})${capStr}</option>`;
+            }).join('');
+            html += `</optgroup>`;
+          } else {
+            html += `<optgroup label="⚠️ No Live Models Discovered">`;
+            html += `<option value="" disabled selected>— Configure API Keys & Click 'Refresh Models' —</option>`;
+            html += `</optgroup>`;
+          }
+
+          if (bootstrapModels.length > 0) {
+            html += `<optgroup label="Bootstrap Suggestions (Validation Required)" disabled>`;
+            html += bootstrapModels.map(m => {
+              return `<option value="${m.id}" disabled>${m.name} (${m.id}) — Not Discovered</option>`;
+            }).join('');
+            html += `</optgroup>`;
+          }
+
+          elements.selectModel.innerHTML = html;
+          const activeChoice = liveModels.some(m => m.id === savedModel)
+            ? savedModel
+            : (liveModels.length > 0 ? liveModels[0].id : (bootstrapModels.length > 0 ? bootstrapModels[0].id : 'gemini-2.0-flash'));
+          elements.selectModel.value = activeChoice;
+          updateSystemStatus(activeChoice);
         }
       }
     } catch (e) {
@@ -304,10 +328,16 @@
         const state = hData?.state || (pData?.configured ? 'CONFIGURED' : 'NOT_CONFIGURED');
         const latencyStr = hData?.latencyMs ? ` ${hData.latencyMs}ms` : '';
 
-        if (state === 'CONNECTED') {
-          el.innerText = `CONNECTED${latencyStr}`;
+        if (state === 'CONNECTED' || state === 'READY') {
+          el.innerText = `${state}${latencyStr}`;
           el.className = 'provider-status-badge valid';
+        } else if (state === 'MODEL_DISCOVERED' || state === 'REACHABLE' || state === 'AUTHENTICATED') {
+          el.innerText = `${state}${latencyStr}`;
+          el.className = 'provider-status-badge degraded';
         } else if (state === 'DEGRADED' || state === 'RATE_LIMITED') {
+          el.innerText = state;
+          el.className = 'provider-status-badge degraded';
+        } else if (state === 'VALIDATING' || state === 'AUTHENTICATING') {
           el.innerText = state;
           el.className = 'provider-status-badge degraded';
         } else if (state === 'AUTH_FAILED' || state === 'QUOTA_EXCEEDED' || state === 'MODEL_UNAVAILABLE' || state === 'PROVIDER_ERROR') {
@@ -936,6 +966,15 @@
 
   // Handle Structured SSE Stream Events
   function handleStreamEvent(event, ctx) {
+    if (event.type === 'provider.transition') {
+      const banner = document.createElement('div');
+      banner.className = 'provider-transition-banner';
+      banner.style.cssText = 'background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 6px; padding: 6px 12px; margin: 8px 0; font-size: 12px; color: #f59e0b; display: flex; align-items: center; gap: 8px;';
+      banner.innerHTML = `<span>🔀</span> <span><strong>Provider Fallback:</strong> Switched from ${event.fromProvider || event.fromModel} to ${event.toProvider || event.toModel} (${event.reason || 'retryable error'})</span>`;
+      ctx.toolsContainer.appendChild(banner);
+      return;
+    }
+
     if (event.type === 'text_chunk') {
       ctx.appendText(event.token || '');
     } else if (event.type === 'tool_start') {

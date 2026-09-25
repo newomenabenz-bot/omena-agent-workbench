@@ -245,49 +245,54 @@
           <button id="btn-refresh-models" class="pill-badge" style="background: var(--bg-card); color: var(--accent-color); border: 1px solid var(--border-color); padding: 4px 8px; font-size: 11px; cursor: pointer;">🔄 Refresh Models</button>
         </div>
 
-        <!-- Google Gemini Subscription -->
+        <!-- Google Gemini Developer API -->
         <div style="display:flex; flex-direction:column; gap:4px; padding: 6px 0;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
             <div class="setting-label">Google Gemini API Key</div>
             <span id="status-gemini" class="provider-status-badge">Not configured</span>
           </div>
+          <div class="setting-desc" style="font-size: 11px; margin-bottom: 2px;">Google AI Studio API key. (Consumer Google Account / Gemini Advanced subscriptions do not grant API access).</div>
           <input type="password" id="input-gemini-key" placeholder="AIzaSy... (leave blank to keep current)" style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
         </div>
 
-        <!-- ChatGPT / OpenAI Subscription -->
+        <!-- OpenAI Platform API -->
         <div style="display:flex; flex-direction:column; gap:4px; padding: 6px 0;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <div class="setting-label">ChatGPT / OpenAI API Key</div>
+            <div class="setting-label">OpenAI Platform API Key</div>
             <span id="status-openai" class="provider-status-badge">Not configured</span>
           </div>
+          <div class="setting-desc" style="font-size: 11px; margin-bottom: 2px;">OpenAI Developer Platform API key. (Consumer ChatGPT Plus/Pro subscriptions do not grant API access).</div>
           <input type="password" id="input-openai-key" placeholder="sk-proj-... (leave blank to keep current)" style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
         </div>
 
-        <!-- Anthropic Claude Subscription -->
+        <!-- Anthropic Claude API -->
         <div style="display:flex; flex-direction:column; gap:4px; padding: 6px 0;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <div class="setting-label">Anthropic Claude Key</div>
+            <div class="setting-label">Anthropic Claude API Key</div>
             <span id="status-claude" class="provider-status-badge">Not configured</span>
           </div>
+          <div class="setting-desc" style="font-size: 11px; margin-bottom: 2px;">Anthropic Console API key (`sk-ant-...`).</div>
           <input type="password" id="input-claude-key" placeholder="sk-ant-... (leave blank to keep current)" style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
         </div>
 
-        <!-- DeepSeek Subscription -->
+        <!-- DeepSeek Platform API -->
         <div style="display:flex; flex-direction:column; gap:4px; padding: 6px 0;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <div class="setting-label">DeepSeek AI Key</div>
+            <div class="setting-label">DeepSeek Platform API Key</div>
             <span id="status-deepseek" class="provider-status-badge">Not configured</span>
           </div>
+          <div class="setting-desc" style="font-size: 11px; margin-bottom: 2px;">DeepSeek Platform API key (`sk-...`).</div>
           <input type="password" id="input-deepseek-key" placeholder="sk-... (leave blank to keep current)" style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
         </div>
 
         <!-- Local Endpoint -->
         <div style="display:flex; flex-direction:column; gap:4px; padding: 6px 0;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <div class="setting-label">Local Ollama / llama.cpp Endpoint</div>
+            <div class="setting-label">Local AI Endpoint (Ollama / llama.cpp)</div>
             <span id="status-local" class="provider-status-badge">Not configured</span>
           </div>
-          <input type="text" id="input-local-endpoint" placeholder="http://host.docker.internal:11434" style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
+          <div class="setting-desc" style="font-size: 11px; margin-bottom: 2px;">Private network local daemon (e.g. `http://127.0.0.1:11434` or `http://host.docker.internal:11434`).</div>
+          <input type="text" id="input-local-endpoint" placeholder="http://127.0.0.1:11434" style="padding: 8px 12px; border-radius: 8px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 13px; font-family: monospace;">
         </div>
 
         <div id="save-status-msg" style="font-size: 12px; padding: 4px 0; display: none;"></div>

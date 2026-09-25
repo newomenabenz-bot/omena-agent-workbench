@@ -108,6 +108,8 @@ export class AdapterManager {
 
   registerDiscoveredModels(providerName, models = []) {
     const norm = (providerName || '').toLowerCase().trim();
+    modelRegistry.registerDiscovered(norm, models);
+
     for (const model of models) {
       if (!model || !model.id) continue;
       let adapter;
@@ -122,20 +124,8 @@ export class AdapterManager {
         if (typeof model.vision === 'boolean') adapter.capabilities.vision = model.vision;
         if (typeof model.reasoning === 'boolean') adapter.capabilities.reasoning = model.reasoning;
         if (model.name) adapter.capabilities.name = model.name;
+        adapter.setConnectionState(ConnectionState.READY);
         this.adapters.set(model.id, adapter);
-
-        modelRegistry.register({
-          id: model.id,
-          name: model.name || model.id,
-          provider: norm,
-          providerName: adapter.name,
-          contextWindow: adapter.capabilities.contextWindow,
-          streaming: adapter.capabilities.streaming,
-          tools: adapter.capabilities.tools,
-          vision: adapter.capabilities.vision,
-          reasoning: adapter.capabilities.reasoning,
-          discovered: true
-        });
       }
     }
   }
@@ -161,28 +151,15 @@ export class AdapterManager {
   }
 
   listModels() {
-    const registered = modelRegistry.list();
-    const result = [];
-    const seen = new Set();
-
-    for (const m of registered) {
-      seen.add(m.id);
+    const allModels = modelRegistry.listAll();
+    return allModels.map(m => {
       const adapter = this.adapters.get(m.id);
-      result.push({
+      return {
         ...m,
-        connectionState: adapter ? adapter.getConnectionState() : ConnectionState.NOT_CONFIGURED,
-        telemetry: adapter ? adapter.getCapabilities().telemetry : null
-      });
-    }
-
-    for (const [id, adapter] of this.adapters.entries()) {
-      if (!seen.has(id)) {
-        seen.add(id);
-        result.push(adapter.getCapabilities());
-      }
-    }
-
-    return result;
+        connectionState: adapter ? adapter.getConnectionState() : (m.available ? ConnectionState.READY : ConnectionState.NOT_CONFIGURED),
+        telemetry: adapter ? adapter.getTelemetry() : null
+      };
+    });
   }
 
   getAggregatedTelemetry() {

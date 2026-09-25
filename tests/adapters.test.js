@@ -46,8 +46,15 @@ async function runAdapterTests() {
     prompt: 'list files',
     tools: sampleTools
   });
-  assert('Gemini payload: has function tools', geminiPayload.tools?.[0]?.type === 'function');
-  assert('Gemini payload: maps tool name correctly', geminiPayload.tools?.[0]?.function?.name === 'execute_shell');
+  assert('Gemini native payload: has functionDeclarations tools', Array.isArray(geminiPayload.tools?.[0]?.functionDeclarations));
+  assert('Gemini native payload: maps tool name correctly', geminiPayload.tools?.[0]?.functionDeclarations?.[0]?.name === 'execute_shell');
+  assert('Gemini native payload: uses native contents/parts', geminiPayload.contents?.[0]?.parts?.[0]?.text === 'list files');
+
+  // Also verify gemini-openai-compatible protocol
+  gemini.protocol = 'gemini-openai-compatible';
+  const geminiCompatPayload = gemini.formatPayload({ prompt: 'list files', tools: sampleTools });
+  assert('Gemini compat payload: formats tools with function wrapper', geminiCompatPayload.tools?.[0]?.function?.name === 'execute_shell');
+  gemini.protocol = 'gemini-native'; // Reset to native default
 
   // 2. OpenAI GPT-4o Adapter
   const gpt4o = adapterManager.getAdapter('gpt-4o');

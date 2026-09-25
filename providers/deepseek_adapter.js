@@ -103,60 +103,45 @@ export class DeepSeekAdapter extends BaseProviderAdapter {
 
   async discoverModels(credential) {
     const key = credential?.deepseek || credential?.deepseekKey || credential?.apiKey || (typeof credential === 'string' ? credential : null) || process.env.DEEPSEEK_API_KEY;
-    const staticList = [
-      {
-        id: 'deepseek-reasoner',
-        name: 'DeepSeek R1 (Reasoner)',
-        provider: 'deepseek',
-        providerName: 'DeepSeek AI',
-        contextWindow: 64000,
-        streaming: true,
-        tools: true,
-        vision: false,
-        reasoning: true
-      },
-      {
-        id: 'deepseek-chat',
-        name: 'DeepSeek V3 (Chat)',
-        provider: 'deepseek',
-        providerName: 'DeepSeek AI',
-        contextWindow: 64000,
-        streaming: true,
-        tools: true,
-        vision: false,
-        reasoning: false
-      }
-    ];
-
-    if (!key) return staticList;
+    if (!key || typeof key !== 'string' || !key.trim()) return [];
 
     try {
       const endpoint = `${this.baseUrl}/models`;
       const res = await fetch(endpoint, {
         headers: {
           'Authorization': `Bearer ${key.trim()}`,
-          'User-Agent': 'OMENA-Agent-Workbench/4.1.0'
+          'User-Agent': 'OMENA-Agent-Workbench/4.1.1'
         },
         signal: AbortSignal.timeout(12000)
       });
-      if (!res.ok) return staticList;
+      if (!res.ok) return [];
       const data = await res.json();
-      if (!data.data || !Array.isArray(data.data)) return staticList;
+      if (!data.data || !Array.isArray(data.data)) return [];
 
-      return data.data.map(m => ({
-        id: m.id,
-        name: m.id === 'deepseek-reasoner' ? 'DeepSeek R1 Reasoner' : (m.id === 'deepseek-chat' ? 'DeepSeek V3 Chat' : m.id),
-        provider: 'deepseek',
-        providerName: 'DeepSeek AI',
-        contextWindow: 64000,
-        streaming: true,
-        tools: true,
-        vision: false,
-        reasoning: m.id.includes('reasoner') || m.id.includes('r1'),
-        discovered: true
-      }));
+      const now = new Date().toISOString();
+
+      return data.data.map(m => {
+        const isReasoning = m.id.includes('reasoner') || m.id.includes('r1');
+        return {
+          id: m.id,
+          name: m.id === 'deepseek-reasoner' ? 'DeepSeek Reasoner (R1)' : (m.id === 'deepseek-chat' ? 'DeepSeek Chat (V3)' : `DeepSeek ${m.id}`),
+          provider: 'deepseek',
+          providerName: 'DeepSeek AI',
+          contextWindow: 64000,
+          streaming: true,
+          tools: true,
+          vision: false,
+          reasoning: isReasoning,
+          source: 'provider_discovery',
+          discoveredAt: now,
+          lastValidatedAt: now,
+          available: true,
+          verified: true,
+          discovered: true
+        };
+      });
     } catch {
-      return staticList;
+      return [];
     }
   }
 
