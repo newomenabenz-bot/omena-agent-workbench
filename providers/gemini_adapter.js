@@ -1,24 +1,43 @@
 /**
- * Google Gemini Provider Adapter
- * Supports gemini-2.0-flash, gemini-1.5-pro
- * Declares capabilities: streaming: true, tools: true, vision: true, reasoning: false
+ * Google Gemini Provider Adapter - v4.1.0 Contract
+ * Supports gemini-2.0-flash, gemini-1.5-pro, gemini-2.0-flash-thinking-exp
+ * Native function calling, multimodal input, granular connection states, and telemetry.
  */
 
-import { BaseProviderAdapter } from './base_adapter.js';
+import { BaseProviderAdapter, ConnectionState, ErrorCode, WorkbenchError } from './base_adapter.js';
 
 export class GeminiAdapter extends BaseProviderAdapter {
   constructor(modelId = 'gemini-2.0-flash') {
+    const isReasoning = modelId.includes('thinking');
     super(modelId, 'Google Gemini', {
       streaming: true,
       tools: true,
       vision: true,
-      reasoning: false // Standard multimodal, does not expose dedicated reasoning token API
+      reasoning: isReasoning,
+      contextWindow: modelId.includes('1.5-pro') ? 2097152 : 1048576
     });
+    this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
   }
 
   formatPayload({ prompt, messages = [], tools = [] }) {
     const formattedMsgs = messages.length > 0 
-      ? messages.map(m => ({ role: m.role, content: m.content }))
+      ? messages.map(m => {
+          if (m.role === 'tool') {
+            return {
+              role: 'tool',
+              tool_call_id: m.tool_call_id || m.callId || 'call_0',
+              content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+            };
+          }
+          if (m.tool_calls) {
+            return {
+              role: 'assistant',
+              content: m.content || null,
+              tool_calls: m.tool_calls
+            };
+          }
+          return { role: m.role, content: m.content };
+        })
       : [{ role: 'user', content: prompt }];
 
     const payload = {
@@ -44,24 +63,38 @@ export class GeminiAdapter extends BaseProviderAdapter {
   /**
    * Validate Gemini API key against Google endpoint
    */
-  async validateCredential(apiKey) {
+  async validateConnection(apiKey) {
     if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length === 0) {
-      return { valid: false, error: 'Gemini API key is required' };
+      this.setConnectionState(ConnectionState.NOT_CONFIGURED);
+      return { valid: false, state: ConnectionState.NOT_CONFIGURED, error: 'Gemini API key is required' };
     }
+
+    this.setConnectionState(ConnectionState.VALIDATING);
     const cleanKey = apiKey.trim();
+    const startTime = Date.now();
+
     try {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`, {
-        headers: { 'User-Agent': 'OMENA-Agent-Workbench/4.0.1' },
+      const endpoint = `${this.baseUrl}/models?key=${cleanKey}`;
+      const res = await fetch(endpoint, {
+        headers: { 'User-Agent': 'OMENA-Agent-Workbench/4.1.0' },
         signal: AbortSignal.timeout(10000)
       });
+
+      const latencyMs = Date.now() - startTime;
+
       if (res.ok) {
-        return { valid: true };
+        this.setConnectionState(ConnectionState.CONNECTED);
+        return { valid: true, state: ConnectionState.CONNECTED, latencyMs };
       }
+
       const data = await res.json().catch(() => ({}));
       const msg = data.error?.message || `HTTP ${res.status}: Invalid Gemini API Key`;
-      return { valid: false, error: msg };
+      const normErr = this.normalizeError(new Error(msg), { status: res.status });
+      return { valid: false, state: this.connectionState, error: normErr.message, latencyMs };
     } catch (e) {
-      return { valid: false, error: `Network error connecting to Google Gemini: ${e.message}` };
+      const latencyMs = Date.now() - startTime;
+      const normErr = this.normalizeError(e);
+      return { valid: false, state: this.connectionState, error: normErr.message, latencyMs };
     }
   }
 
@@ -72,8 +105,9 @@ export class GeminiAdapter extends BaseProviderAdapter {
     const cleanKey = (apiKey || '').trim();
     if (!cleanKey) return [];
     try {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`, {
-        headers: { 'User-Agent': 'OMENA-Agent-Workbench/4.0.1' },
+      const endpoint = `${this.baseUrl}/models?key=${cleanKey}`;
+      const res = await fetch(endpoint, {
+        headers: { 'User-Agent': 'OMENA-Agent-Workbench/4.1.0' },
         signal: AbortSignal.timeout(12000)
       });
       if (!res.ok) return [];
@@ -84,11 +118,12 @@ export class GeminiAdapter extends BaseProviderAdapter {
         .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
         .map(m => {
           const cleanId = m.name.replace(/^models\//, '');
-          const isReasoning = cleanId.includes('thinking') || cleanId.includes('2.0-flash-thinking');
+          const isReasoning = cleanId.includes('thinking');
           return {
             id: cleanId,
             name: m.displayName || cleanId,
-            provider: 'Google Gemini',
+            provider: 'gemini',
+            providerName: 'Google Gemini',
             streaming: true,
             tools: true,
             vision: true,
@@ -102,57 +137,142 @@ export class GeminiAdapter extends BaseProviderAdapter {
     }
   }
 
-  async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit }) {
-    const apiKey = credentials.geminiKey || process.env.GEMINI_API_KEY;
-    
-    if (apiKey) {
-      try {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`;
-        const payload = this.formatPayload({ prompt, messages, tools });
+  async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit, signal, callId = null }) {
+    const apiKey = credentials.gemini || credentials.geminiKey || process.env.GEMINI_API_KEY;
 
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify(payload)
-        });
+    if (!apiKey) {
+      this.setConnectionState(ConnectionState.AUTH_REQUIRED);
+      throw new WorkbenchError(ErrorCode.AUTH_FAILED, 'Gemini API key is not configured. Please add it in Settings.');
+    }
 
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`Gemini API Error (${res.status}): ${errText}`);
-        }
+    const startTime = Date.now();
+    let ttftRecorded = false;
+    let ttftMs = 0;
+    let completionTokens = 0;
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
+    const controller = new AbortController();
+    if (callId) this.activeControllers.set(callId, controller);
+    const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
+    try {
+      const endpoint = `${this.baseUrl}/openai/chat/completions`;
+      const payload = this.formatPayload({ prompt, messages, tools });
 
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith('data: ')) continue;
-            const dataStr = trimmed.slice(6);
-            if (dataStr === '[DONE]') break;
-            try {
-              const parsed = JSON.parse(dataStr);
-              const delta = parsed.choices?.[0]?.delta?.content || '';
-              if (delta) emit({ type: 'text_chunk', token: delta });
-            } catch {}
-          }
-        }
-        return;
-      } catch (err) {
-        emit({ type: 'text_chunk', token: `⚠️ *Gemini API Notice:* ${err.message}\nContinuing with autonomous local tool execution...\n\n` });
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey.trim()}`
+        },
+        body: JSON.stringify(payload),
+        signal: combinedSignal
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        let errMsg = errText;
+        try {
+          const parsed = JSON.parse(errText);
+          if (parsed.error?.message) errMsg = parsed.error.message;
+        } catch {}
+        throw this.normalizeError(new Error(`Gemini API Error: ${errMsg}`), { status: res.status });
       }
-    } else {
-      emit({ type: 'text_chunk', token: `ℹ️ *Autonomous Local Execution:* Model "${this.id}" requested without configured Gemini API key. Executing via local tool loop...\n\n` });
+
+      this.setConnectionState(ConnectionState.CONNECTED);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      // Accumulator for tool calls
+      const toolCallAccumulators = new Map();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (!ttftRecorded) {
+          ttftMs = Date.now() - startTime;
+          ttftRecorded = true;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+          const dataStr = trimmed.slice(6);
+          if (dataStr === '[DONE]') break;
+
+          try {
+            const parsed = JSON.parse(dataStr);
+            const choice = parsed.choices?.[0];
+            if (!choice) continue;
+
+            // Stream text chunk
+            const delta = choice.delta?.content;
+            if (delta) {
+              completionTokens += Math.ceil(delta.length / 4);
+              emit({ type: 'text_chunk', token: delta });
+            }
+
+            // Stream tool calls
+            const toolDeltas = choice.delta?.tool_calls;
+            if (toolDeltas && Array.isArray(toolDeltas)) {
+              for (const td of toolDeltas) {
+                const idx = td.index ?? 0;
+                if (!toolCallAccumulators.has(idx)) {
+                  toolCallAccumulators.set(idx, {
+                    id: td.id || `call_${Date.now()}_${idx}`,
+                    name: td.function?.name || '',
+                    arguments: ''
+                  });
+                }
+                const acc = toolCallAccumulators.get(idx);
+                if (td.id) acc.id = td.id;
+                if (td.function?.name) acc.name = td.function.name;
+                if (td.function?.arguments) acc.arguments += td.function.arguments;
+              }
+            }
+          } catch {}
+        }
+      }
+
+      // Finalize any accumulated tool calls
+      for (const [idx, call] of toolCallAccumulators.entries()) {
+        let parsedArgs = {};
+        try {
+          parsedArgs = JSON.parse(call.arguments || '{}');
+        } catch {
+          parsedArgs = { raw: call.arguments };
+        }
+        emit({
+          type: 'tool_call',
+          call: {
+            id: call.id,
+            name: call.name,
+            arguments: parsedArgs
+          }
+        });
+      }
+
+      const totalMs = Date.now() - startTime;
+      this.recordTelemetry({
+        tokens: { prompt: Math.ceil(prompt.length / 4), completion: completionTokens, reasoning: 0 },
+        ttftMs,
+        totalMs
+      });
+
+    } catch (err) {
+      if (err.name === 'AbortError' || combinedSignal.aborted) {
+        throw err;
+      }
+      const norm = this.normalizeError(err);
+      this.recordTelemetry({ error: norm });
+      throw norm;
+    } finally {
+      if (callId) this.activeControllers.delete(callId);
     }
   }
 }

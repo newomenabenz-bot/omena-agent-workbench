@@ -1,11 +1,12 @@
-# OMENA Autonomous Agentic IDE & Mobile Workbench v4.0
-> **Production-Grade Private Self-Hosted Autonomous AI Agent Workbench & Agentic IDE**  
-> Minimalist `llama.cpp`-style mobile web UI backed by an enterprise-hardened Node.js engine, multi-provider adapters, first-class Agentic IDE Workbench, native SQLite WAL persistence, and SSRF guardrails.
+# OMENA Autonomous Agentic IDE & Multi-Provider Workbench v4.1.0
+> **Production-Grade Provider-Agnostic Autonomous AI Agent Workbench & Agentic IDE**  
+> Minimalist `llama.cpp`-style mobile web UI backed by an enterprise-hardened Node.js engine, multi-provider runtime contract, AES-256-GCM encrypted secret persistence, dynamic model registry & capability routing, multi-turn tool continuation loop, and native SQLite WAL persistence.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](Dockerfile)
 [![Node.js](https://img.shields.io/badge/Node.js-v22+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite%20WAL-003B57.svg?logo=sqlite&logoColor=white)](https://sqlite.org)
+[![Version](https://img.shields.io/badge/Release-v4.1.0-emerald.svg)](https://github.com/newomenabenz-bot/omena-agent-workbench)
 
 ---
 

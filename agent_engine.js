@@ -46,6 +46,10 @@ export class AgentEngine {
     }, emit);
   }
 
+  cancelRun(runId) {
+    return this.orchestrator.cancelRun(runId);
+  }
+
   detectIntent(prompt) {
     const lower = prompt.toLowerCase();
 

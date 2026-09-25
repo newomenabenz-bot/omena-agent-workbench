@@ -51,6 +51,7 @@
     statusLocal: document.getElementById('status-local'),
     saveStatusMsg: document.getElementById('save-status-msg'),
     btnSaveKeys: document.getElementById('btn-save-keys'),
+    btnRefreshModels: document.getElementById('btn-refresh-models'),
     settingsCdpStatus: document.getElementById('settings-cdp-status'),
     checkAutoExec: document.getElementById('check-auto-exec'),
     sessionsList: document.getElementById('sessions-list'),
@@ -296,23 +297,39 @@
       if (!res.ok) return;
       const data = await res.json();
       const providers = data.providers || {};
+      const health = data.health || {};
 
-      const updateBadge = (el, pData) => {
+      const updateBadge = (el, pData, hData) => {
         if (!el) return;
-        if (pData && pData.configured) {
-          el.innerText = `Active (${pData.maskedKey || 'configured'})`;
+        const state = hData?.state || (pData?.configured ? 'CONFIGURED' : 'NOT_CONFIGURED');
+        const latencyStr = hData?.latencyMs ? ` ${hData.latencyMs}ms` : '';
+
+        if (state === 'CONNECTED') {
+          el.innerText = `CONNECTED${latencyStr}`;
+          el.className = 'provider-status-badge valid';
+        } else if (state === 'DEGRADED' || state === 'RATE_LIMITED') {
+          el.innerText = state;
+          el.className = 'provider-status-badge degraded';
+        } else if (state === 'AUTH_FAILED' || state === 'QUOTA_EXCEEDED' || state === 'MODEL_UNAVAILABLE' || state === 'PROVIDER_ERROR') {
+          el.innerText = state;
+          el.className = 'provider-status-badge invalid';
+        } else if (state === 'DISCONNECTED' || state === 'NETWORK_ERROR') {
+          el.innerText = state;
+          el.className = 'provider-status-badge invalid';
+        } else if (pData && pData.configured) {
+          el.innerText = `CONFIGURED (${pData.maskedKey || 'saved'})`;
           el.className = 'provider-status-badge valid';
         } else {
-          el.innerText = 'Not configured';
+          el.innerText = 'NOT CONFIGURED';
           el.className = 'provider-status-badge invalid';
         }
       };
 
-      updateBadge(elements.statusGemini, providers.gemini);
-      updateBadge(elements.statusOpenai, providers.openai);
-      updateBadge(elements.statusClaude, providers.anthropic);
-      updateBadge(elements.statusDeepseek, providers.deepseek);
-      updateBadge(elements.statusLocal, providers.local);
+      updateBadge(elements.statusGemini, providers.gemini, health.gemini);
+      updateBadge(elements.statusOpenai, providers.openai, health.openai);
+      updateBadge(elements.statusClaude, providers.anthropic, health.anthropic);
+      updateBadge(elements.statusDeepseek, providers.deepseek, health.deepseek);
+      updateBadge(elements.statusLocal, providers.local, health.local);
 
       if (providers.local && providers.local.maskedKey && elements.inputLocalEndpoint) {
         elements.inputLocalEndpoint.value = providers.local.maskedKey;
@@ -320,6 +337,26 @@
     } catch (err) {
       console.warn('[Provider Status Load Notice]', err.message);
     }
+  }
+
+  if (elements.btnRefreshModels) {
+    elements.btnRefreshModels.addEventListener('click', async () => {
+      elements.btnRefreshModels.disabled = true;
+      elements.btnRefreshModels.innerText = 'Refreshing...';
+      try {
+        const res = await fetch('/api/providers/models/refresh', { method: 'POST', credentials: 'include' });
+        const data = await res.json();
+        if (data.success) {
+          await loadModels();
+          await loadProviderStatus();
+        }
+      } catch (e) {
+        console.warn('Model refresh failed:', e.message);
+      } finally {
+        elements.btnRefreshModels.disabled = false;
+        elements.btnRefreshModels.innerText = '🔄 Refresh Models';
+      }
+    });
   }
 
   async function saveSubscriptions() {

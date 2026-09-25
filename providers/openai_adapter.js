@@ -1,24 +1,43 @@
 /**
- * OpenAI / ChatGPT Provider Adapter
- * Supports gpt-4o (reasoning: false) and o3-mini (reasoning: true)
+ * OpenAI / ChatGPT Provider Adapter - v4.1.0 Contract
+ * Supports gpt-4o, gpt-4o-mini, o3-mini, o1
+ * Tool calling delta accumulation, reasoning parameter support, and strict connection states.
  */
 
-import { BaseProviderAdapter } from './base_adapter.js';
+import { BaseProviderAdapter, ConnectionState, ErrorCode, WorkbenchError } from './base_adapter.js';
 
 export class OpenAIAdapter extends BaseProviderAdapter {
   constructor(modelId = 'gpt-4o') {
-    const isReasoningModel = modelId.startsWith('o1') || modelId.startsWith('o3');
+    const isReasoning = modelId.startsWith('o1') || modelId.startsWith('o3');
     super(modelId, 'OpenAI ChatGPT', {
       streaming: true,
       tools: true,
-      vision: !isReasoningModel,
-      reasoning: isReasoningModel // True only for dedicated reasoning token API (o1/o3)
+      vision: !isReasoning,
+      reasoning: isReasoning,
+      contextWindow: isReasoning ? 200000 : 128000
     });
+    this.baseUrl = 'https://api.openai.com/v1';
   }
 
   formatPayload({ prompt, messages = [], tools = [] }) {
     const formattedMsgs = messages.length > 0 
-      ? messages.map(m => ({ role: m.role, content: m.content }))
+      ? messages.map(m => {
+          if (m.role === 'tool') {
+            return {
+              role: 'tool',
+              tool_call_id: m.tool_call_id || m.callId || 'call_0',
+              content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+            };
+          }
+          if (m.tool_calls) {
+            return {
+              role: 'assistant',
+              content: m.content || null,
+              tool_calls: m.tool_calls
+            };
+          }
+          return { role: m.role, content: m.content };
+        })
       : [{ role: 'user', content: prompt }];
 
     const payload = {
@@ -45,43 +64,53 @@ export class OpenAIAdapter extends BaseProviderAdapter {
     return payload;
   }
 
-  /**
-   * Validate OpenAI API key
-   */
-  async validateCredential(apiKey) {
+  async validateConnection(apiKey) {
     if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length === 0) {
-      return { valid: false, error: 'OpenAI API key is required' };
+      this.setConnectionState(ConnectionState.NOT_CONFIGURED);
+      return { valid: false, state: ConnectionState.NOT_CONFIGURED, error: 'OpenAI API key is required' };
     }
+
+    this.setConnectionState(ConnectionState.VALIDATING);
     const cleanKey = apiKey.trim();
+    const startTime = Date.now();
+
     try {
-      const res = await fetch(`https://api.openai.com/v1/models`, {
+      const endpoint = `${this.baseUrl}/models`;
+      const res = await fetch(endpoint, {
         headers: {
           'Authorization': `Bearer ${cleanKey}`,
-          'User-Agent': 'OMENA-Agent-Workbench/4.0.1'
+          'User-Agent': 'OMENA-Agent-Workbench/4.1.0'
         },
         signal: AbortSignal.timeout(10000)
       });
+
+      const latencyMs = Date.now() - startTime;
+
       if (res.ok) {
-        return { valid: true };
+        this.setConnectionState(ConnectionState.CONNECTED);
+        return { valid: true, state: ConnectionState.CONNECTED, latencyMs };
       }
+
       const data = await res.json().catch(() => ({}));
-      return { valid: false, error: data.error?.message || `HTTP ${res.status}: Invalid OpenAI API Key` };
+      const msg = data.error?.message || `HTTP ${res.status}: Invalid OpenAI API Key`;
+      const normErr = this.normalizeError(new Error(msg), { status: res.status });
+      return { valid: false, state: this.connectionState, error: normErr.message, latencyMs };
     } catch (e) {
-      return { valid: false, error: `Network error connecting to OpenAI: ${e.message}` };
+      const latencyMs = Date.now() - startTime;
+      const normErr = this.normalizeError(e);
+      return { valid: false, state: this.connectionState, error: normErr.message, latencyMs };
     }
   }
 
-  /**
-   * Dynamically discover OpenAI models available to this credential
-   */
   async discoverModels(apiKey) {
     const cleanKey = (apiKey || '').trim();
     if (!cleanKey) return [];
     try {
-      const res = await fetch(`https://api.openai.com/v1/models`, {
+      const endpoint = `${this.baseUrl}/models`;
+      const res = await fetch(endpoint, {
         headers: {
           'Authorization': `Bearer ${cleanKey}`,
-          'User-Agent': 'OMENA-Agent-Workbench/4.0.1'
+          'User-Agent': 'OMENA-Agent-Workbench/4.1.0'
         },
         signal: AbortSignal.timeout(12000)
       });
@@ -97,12 +126,13 @@ export class OpenAIAdapter extends BaseProviderAdapter {
           return {
             id: m.id,
             name: `OpenAI ${m.id}`,
-            provider: 'OpenAI ChatGPT',
+            provider: 'openai',
+            providerName: 'OpenAI ChatGPT',
             streaming: true,
             tools: true,
             vision: !isReasoning,
             reasoning: isReasoning,
-            contextWindow: 128000,
+            contextWindow: isReasoning ? 200000 : 128000,
             discovered: true
           };
         });
@@ -111,57 +141,138 @@ export class OpenAIAdapter extends BaseProviderAdapter {
     }
   }
 
-  async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit }) {
-    const apiKey = credentials.openaiKey || process.env.OPENAI_API_KEY;
+  async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit, signal, callId = null }) {
+    const apiKey = credentials.openai || credentials.openaiKey || process.env.OPENAI_API_KEY;
 
-    if (apiKey) {
-      try {
-        const endpoint = `https://api.openai.com/v1/chat/completions`;
-        const payload = this.formatPayload({ prompt, messages, tools });
+    if (!apiKey) {
+      this.setConnectionState(ConnectionState.AUTH_REQUIRED);
+      throw new WorkbenchError(ErrorCode.AUTH_FAILED, 'OpenAI API key is not configured. Please add it in Settings.');
+    }
 
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify(payload)
-        });
+    const startTime = Date.now();
+    let ttftRecorded = false;
+    let ttftMs = 0;
+    let completionTokens = 0;
 
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`OpenAI API Error (${res.status}): ${errText}`);
-        }
+    const controller = new AbortController();
+    if (callId) this.activeControllers.set(callId, controller);
+    const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
+    try {
+      const endpoint = `${this.baseUrl}/chat/completions`;
+      const payload = this.formatPayload({ prompt, messages, tools });
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey.trim()}`
+        },
+        body: JSON.stringify(payload),
+        signal: combinedSignal
+      });
 
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith('data: ')) continue;
-            const dataStr = trimmed.slice(6);
-            if (dataStr === '[DONE]') break;
-            try {
-              const parsed = JSON.parse(dataStr);
-              const delta = parsed.choices?.[0]?.delta?.content || '';
-              if (delta) emit({ type: 'text_chunk', token: delta });
-            } catch {}
-          }
-        }
-        return;
-      } catch (err) {
-        emit({ type: 'text_chunk', token: `⚠️ *OpenAI API Notice:* ${err.message}\nContinuing with autonomous local tool execution...\n\n` });
+      if (!res.ok) {
+        const errText = await res.text();
+        let errMsg = errText;
+        try {
+          const parsed = JSON.parse(errText);
+          if (parsed.error?.message) errMsg = parsed.error.message;
+        } catch {}
+        throw this.normalizeError(new Error(`OpenAI API Error: ${errMsg}`), { status: res.status });
       }
-    } else {
-      emit({ type: 'text_chunk', token: `ℹ️ *Autonomous Local Execution:* Model "${this.id}" requested without configured OpenAI API key. Executing via local tool loop...\n\n` });
+
+      this.setConnectionState(ConnectionState.CONNECTED);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      const toolCallAccumulators = new Map();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (!ttftRecorded) {
+          ttftMs = Date.now() - startTime;
+          ttftRecorded = true;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+          const dataStr = trimmed.slice(6);
+          if (dataStr === '[DONE]') break;
+
+          try {
+            const parsed = JSON.parse(dataStr);
+            const choice = parsed.choices?.[0];
+            if (!choice) continue;
+
+            const delta = choice.delta?.content;
+            if (delta) {
+              completionTokens += Math.ceil(delta.length / 4);
+              emit({ type: 'text_chunk', token: delta });
+            }
+
+            const toolDeltas = choice.delta?.tool_calls;
+            if (toolDeltas && Array.isArray(toolDeltas)) {
+              for (const td of toolDeltas) {
+                const idx = td.index ?? 0;
+                if (!toolCallAccumulators.has(idx)) {
+                  toolCallAccumulators.set(idx, {
+                    id: td.id || `call_${Date.now()}_${idx}`,
+                    name: td.function?.name || '',
+                    arguments: ''
+                  });
+                }
+                const acc = toolCallAccumulators.get(idx);
+                if (td.id) acc.id = td.id;
+                if (td.function?.name) acc.name = td.function.name;
+                if (td.function?.arguments) acc.arguments += td.function.arguments;
+              }
+            }
+          } catch {}
+        }
+      }
+
+      for (const [idx, call] of toolCallAccumulators.entries()) {
+        let parsedArgs = {};
+        try {
+          parsedArgs = JSON.parse(call.arguments || '{}');
+        } catch {
+          parsedArgs = { raw: call.arguments };
+        }
+        emit({
+          type: 'tool_call',
+          call: {
+            id: call.id,
+            name: call.name,
+            arguments: parsedArgs
+          }
+        });
+      }
+
+      const totalMs = Date.now() - startTime;
+      this.recordTelemetry({
+        tokens: { prompt: Math.ceil(prompt.length / 4), completion: completionTokens, reasoning: 0 },
+        ttftMs,
+        totalMs
+      });
+
+    } catch (err) {
+      if (err.name === 'AbortError' || combinedSignal.aborted) {
+        throw err;
+      }
+      const norm = this.normalizeError(err);
+      this.recordTelemetry({ error: norm });
+      throw norm;
+    } finally {
+      if (callId) this.activeControllers.delete(callId);
     }
   }
 }

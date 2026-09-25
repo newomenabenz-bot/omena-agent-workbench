@@ -1,102 +1,49 @@
 /**
- * DeepSeek Provider Adapter
- * Supports deepseek-r1 (reasoning: true)
+ * DeepSeek Provider Adapter - v4.1.0 Contract
+ * Supports deepseek-chat (V3) and deepseek-reasoner (R1)
+ * Dedicated thinking / reasoning stream, tool calling deltas, and telemetry.
  */
 
-import { BaseProviderAdapter } from './base_adapter.js';
+import { BaseProviderAdapter, ConnectionState, ErrorCode, WorkbenchError } from './base_adapter.js';
 
 export class DeepSeekAdapter extends BaseProviderAdapter {
   constructor(modelId = 'deepseek-r1') {
+    const isReasoner = modelId.includes('r1') || modelId.includes('reasoner');
     super(modelId, 'DeepSeek AI', {
       streaming: true,
       tools: true,
       vision: false,
-      reasoning: true // Exposes dedicated reasoning/thinking token stream
+      reasoning: isReasoner,
+      contextWindow: 64000
     });
-  }
-
-  async validateCredential(credential) {
-    const key = credential?.deepseekKey || credential?.apiKey || (typeof credential === 'string' ? credential : null) || process.env.DEEPSEEK_API_KEY;
-    if (!key || typeof key !== 'string' || key.trim().length === 0) {
-      return { valid: false, error: 'No DeepSeek API key provided.' };
-    }
-
-    try {
-      const res = await fetch('https://api.deepseek.com/models', {
-        headers: {
-          'Authorization': `Bearer ${key.trim()}`
-        }
-      });
-      if (res.ok) {
-        return { valid: true };
-      }
-      const data = await res.json().catch(() => ({}));
-      const msg = data.error?.message || `HTTP ${res.status}: ${res.statusText}`;
-      return { valid: false, error: `DeepSeek validation failed: ${msg}` };
-    } catch (err) {
-      return { valid: false, error: `DeepSeek validation error: ${err.message}` };
-    }
-  }
-
-  async discoverModels(credential) {
-    const key = credential?.deepseekKey || credential?.apiKey || (typeof credential === 'string' ? credential : null) || process.env.DEEPSEEK_API_KEY;
-    const staticFallback = [
-      {
-        id: 'deepseek-r1',
-        name: 'DeepSeek R1 (Reasoner)',
-        provider: 'DeepSeek AI',
-        contextWindow: 64000,
-        streaming: true,
-        tools: true,
-        vision: false,
-        reasoning: true
-      },
-      {
-        id: 'deepseek-chat',
-        name: 'DeepSeek V3 (Chat)',
-        provider: 'DeepSeek AI',
-        contextWindow: 64000,
-        streaming: true,
-        tools: true,
-        vision: false,
-        reasoning: false
-      }
-    ];
-
-    if (!key) return staticFallback;
-
-    try {
-      const res = await fetch('https://api.deepseek.com/models', {
-        headers: { 'Authorization': `Bearer ${key.trim()}` }
-      });
-      if (!res.ok) return staticFallback;
-      const data = await res.json();
-      if (!data.data || !Array.isArray(data.data)) return staticFallback;
-
-      const discovered = data.data.map(m => ({
-        id: m.id,
-        name: m.id === 'deepseek-reasoner' ? 'DeepSeek R1 Reasoner' : (m.id === 'deepseek-chat' ? 'DeepSeek V3 Chat' : m.id),
-        provider: 'DeepSeek AI',
-        contextWindow: 64000,
-        streaming: true,
-        tools: true,
-        vision: false,
-        reasoning: m.id.includes('reasoner') || m.id.includes('r1')
-      }));
-
-      return discovered.length > 0 ? discovered : staticFallback;
-    } catch {
-      return staticFallback;
-    }
+    this.baseUrl = 'https://api.deepseek.com';
   }
 
   formatPayload({ prompt, messages = [], tools = [] }) {
     const formattedMsgs = messages.length > 0 
-      ? messages.map(m => ({ role: m.role, content: m.content }))
+      ? messages.map(m => {
+          if (m.role === 'tool') {
+            return {
+              role: 'tool',
+              tool_call_id: m.tool_call_id || m.callId || 'call_0',
+              content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+            };
+          }
+          if (m.tool_calls) {
+            return {
+              role: 'assistant',
+              content: m.content || null,
+              tool_calls: m.tool_calls
+            };
+          }
+          return { role: m.role, content: m.content };
+        })
       : [{ role: 'user', content: prompt }];
 
+    const modelName = this.id === 'deepseek-r1' ? 'deepseek-reasoner' : (this.id || 'deepseek-reasoner');
+
     const payload = {
-      model: this.id === 'deepseek-r1' ? 'deepseek-reasoner' : (this.id || 'deepseek-reasoner'),
+      model: modelName,
       messages: formattedMsgs,
       stream: true
     };
@@ -115,60 +62,251 @@ export class DeepSeekAdapter extends BaseProviderAdapter {
     return payload;
   }
 
-  async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit }) {
-    const apiKey = credentials.deepseekKey || process.env.DEEPSEEK_API_KEY;
-
-    if (apiKey) {
-      try {
-        const endpoint = `https://api.deepseek.com/chat/completions`;
-        const payload = this.formatPayload({ prompt, messages, tools });
-
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify(payload)
-        });
-
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`DeepSeek API Error (${res.status}): ${errText}`);
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith('data: ')) continue;
-            const dataStr = trimmed.slice(6);
-            if (dataStr === '[DONE]') break;
-            try {
-              const parsed = JSON.parse(dataStr);
-              // Handle reasoning_content if present
-              const reasoning = parsed.choices?.[0]?.delta?.reasoning_content || '';
-              if (reasoning) emit({ type: 'text_chunk', token: `💭 *${reasoning}*` });
-              const delta = parsed.choices?.[0]?.delta?.content || '';
-              if (delta) emit({ type: 'text_chunk', token: delta });
-            } catch {}
-          }
-        }
-        return;
-      } catch (err) {
-        emit({ type: 'text_chunk', token: `⚠️ *DeepSeek Direct Stream Notice:* ${err.message}\n` });
-      }
+  async validateConnection(credential) {
+    const key = credential?.deepseek || credential?.deepseekKey || credential?.apiKey || (typeof credential === 'string' ? credential : null) || process.env.DEEPSEEK_API_KEY;
+    if (!key || typeof key !== 'string' || key.trim().length === 0) {
+      this.setConnectionState(ConnectionState.NOT_CONFIGURED);
+      return { valid: false, state: ConnectionState.NOT_CONFIGURED, error: 'DeepSeek API key is required' };
     }
 
-    emit({ type: 'text_chunk', token: `🧠 *DeepSeek Engine (${this.id})* processing reasoning request...\n\n` });
+    this.setConnectionState(ConnectionState.VALIDATING);
+    const cleanKey = key.trim();
+    const startTime = Date.now();
+
+    try {
+      const endpoint = `${this.baseUrl}/models`;
+      const res = await fetch(endpoint, {
+        headers: {
+          'Authorization': `Bearer ${cleanKey}`,
+          'User-Agent': 'OMENA-Agent-Workbench/4.1.0'
+        },
+        signal: AbortSignal.timeout(10000)
+      });
+
+      const latencyMs = Date.now() - startTime;
+
+      if (res.ok) {
+        this.setConnectionState(ConnectionState.CONNECTED);
+        return { valid: true, state: ConnectionState.CONNECTED, latencyMs };
+      }
+
+      const data = await res.json().catch(() => ({}));
+      const msg = data.error?.message || `HTTP ${res.status}: ${res.statusText}`;
+      const normErr = this.normalizeError(new Error(msg), { status: res.status });
+      return { valid: false, state: this.connectionState, error: normErr.message, latencyMs };
+    } catch (err) {
+      const latencyMs = Date.now() - startTime;
+      const normErr = this.normalizeError(err);
+      return { valid: false, state: this.connectionState, error: normErr.message, latencyMs };
+    }
+  }
+
+  async discoverModels(credential) {
+    const key = credential?.deepseek || credential?.deepseekKey || credential?.apiKey || (typeof credential === 'string' ? credential : null) || process.env.DEEPSEEK_API_KEY;
+    const staticList = [
+      {
+        id: 'deepseek-reasoner',
+        name: 'DeepSeek R1 (Reasoner)',
+        provider: 'deepseek',
+        providerName: 'DeepSeek AI',
+        contextWindow: 64000,
+        streaming: true,
+        tools: true,
+        vision: false,
+        reasoning: true
+      },
+      {
+        id: 'deepseek-chat',
+        name: 'DeepSeek V3 (Chat)',
+        provider: 'deepseek',
+        providerName: 'DeepSeek AI',
+        contextWindow: 64000,
+        streaming: true,
+        tools: true,
+        vision: false,
+        reasoning: false
+      }
+    ];
+
+    if (!key) return staticList;
+
+    try {
+      const endpoint = `${this.baseUrl}/models`;
+      const res = await fetch(endpoint, {
+        headers: {
+          'Authorization': `Bearer ${key.trim()}`,
+          'User-Agent': 'OMENA-Agent-Workbench/4.1.0'
+        },
+        signal: AbortSignal.timeout(12000)
+      });
+      if (!res.ok) return staticList;
+      const data = await res.json();
+      if (!data.data || !Array.isArray(data.data)) return staticList;
+
+      return data.data.map(m => ({
+        id: m.id,
+        name: m.id === 'deepseek-reasoner' ? 'DeepSeek R1 Reasoner' : (m.id === 'deepseek-chat' ? 'DeepSeek V3 Chat' : m.id),
+        provider: 'deepseek',
+        providerName: 'DeepSeek AI',
+        contextWindow: 64000,
+        streaming: true,
+        tools: true,
+        vision: false,
+        reasoning: m.id.includes('reasoner') || m.id.includes('r1'),
+        discovered: true
+      }));
+    } catch {
+      return staticList;
+    }
+  }
+
+  async streamChat({ prompt, messages = [], tools = [], credentials = {}, emit, signal, callId = null }) {
+    const apiKey = credentials.deepseek || credentials.deepseekKey || credentials.apiKey || process.env.DEEPSEEK_API_KEY;
+
+    if (!apiKey) {
+      this.setConnectionState(ConnectionState.AUTH_REQUIRED);
+      throw new WorkbenchError(ErrorCode.AUTH_FAILED, 'DeepSeek API key is not configured. Please add it in Settings.');
+    }
+
+    const startTime = Date.now();
+    let ttftRecorded = false;
+    let ttftMs = 0;
+    let completionTokens = 0;
+    let reasoningTokens = 0;
+
+    const controller = new AbortController();
+    if (callId) this.activeControllers.set(callId, controller);
+    const combinedSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+
+    try {
+      const endpoint = `${this.baseUrl}/chat/completions`;
+      const payload = this.formatPayload({ prompt, messages, tools });
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey.trim()}`
+        },
+        body: JSON.stringify(payload),
+        signal: combinedSignal
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        let errMsg = errText;
+        try {
+          const parsed = JSON.parse(errText);
+          if (parsed.error?.message) errMsg = parsed.error.message;
+        } catch {}
+        throw this.normalizeError(new Error(`DeepSeek API Error: ${errMsg}`), { status: res.status });
+      }
+
+      this.setConnectionState(ConnectionState.CONNECTED);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      const toolCallAccumulators = new Map();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (!ttftRecorded) {
+          ttftMs = Date.now() - startTime;
+          ttftRecorded = true;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+          const dataStr = trimmed.slice(6);
+          if (dataStr === '[DONE]') break;
+
+          try {
+            const parsed = JSON.parse(dataStr);
+            const choice = parsed.choices?.[0];
+            if (!choice) continue;
+
+            // Stream reasoning content (DeepSeek R1 thinking)
+            const reasoning = choice.delta?.reasoning_content;
+            if (reasoning) {
+              reasoningTokens += Math.ceil(reasoning.length / 4);
+              emit({ type: 'reasoning_chunk', token: reasoning });
+              emit({ type: 'agent.thinking', message: reasoning });
+            }
+
+            // Stream standard content
+            const delta = choice.delta?.content;
+            if (delta) {
+              completionTokens += Math.ceil(delta.length / 4);
+              emit({ type: 'text_chunk', token: delta });
+            }
+
+            // Tool calling deltas
+            const toolDeltas = choice.delta?.tool_calls;
+            if (toolDeltas && Array.isArray(toolDeltas)) {
+              for (const td of toolDeltas) {
+                const idx = td.index ?? 0;
+                if (!toolCallAccumulators.has(idx)) {
+                  toolCallAccumulators.set(idx, {
+                    id: td.id || `call_${Date.now()}_${idx}`,
+                    name: td.function?.name || '',
+                    arguments: ''
+                  });
+                }
+                const acc = toolCallAccumulators.get(idx);
+                if (td.id) acc.id = td.id;
+                if (td.function?.name) acc.name = td.function.name;
+                if (td.function?.arguments) acc.arguments += td.function.arguments;
+              }
+            }
+          } catch {}
+        }
+      }
+
+      for (const [idx, call] of toolCallAccumulators.entries()) {
+        let parsedArgs = {};
+        try {
+          parsedArgs = JSON.parse(call.arguments || '{}');
+        } catch {
+          parsedArgs = { raw: call.arguments };
+        }
+        emit({
+          type: 'tool_call',
+          call: {
+            id: call.id,
+            name: call.name,
+            arguments: parsedArgs
+          }
+        });
+      }
+
+      const totalMs = Date.now() - startTime;
+      this.recordTelemetry({
+        tokens: {
+          prompt: Math.ceil(prompt.length / 4),
+          completion: completionTokens,
+          reasoning: reasoningTokens
+        },
+        ttftMs,
+        totalMs
+      });
+
+    } catch (err) {
+      if (err.name === 'AbortError' || combinedSignal.aborted) {
+        throw err;
+      }
+      const norm = this.normalizeError(err);
+      this.recordTelemetry({ error: norm });
+      throw norm;
+    } finally {
+      if (callId) this.activeControllers.delete(callId);
+    }
   }
 }

@@ -314,21 +314,18 @@ export class AgenticWorkbench {
         const chromePath = process.env.PUPPETEER_EXECUTABLE_PATH || (isLinux ? '/usr/bin/chromium' : 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe');
 
         const launchArgs = [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
           '--disable-gpu',
           '--disable-dev-shm-usage',
           '--window-size=1280,800'
         ];
 
-        // Only add --no-sandbox where sandboxing is disabled in environment/container
-        if (process.env.DOCKER_CONTAINER || isLinux) {
-          launchArgs.push('--no-sandbox', '--disable-setuid-sandbox');
-        }
-
         try {
           this.activeBrowser = await puppeteer.launch({
             executablePath: fs.existsSync(chromePath) ? chromePath : undefined,
             channel: !fs.existsSync(chromePath) ? 'chrome' : undefined,
-            headless: 'new',
+            headless: true,
             args: launchArgs
           });
           return { status: 'launched', browser: this.activeBrowser };
