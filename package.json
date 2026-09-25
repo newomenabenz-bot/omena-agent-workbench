@@ -24,5 +24,8 @@
     "devops"
   ],
   "author": "OMENA Autonomous Systems",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "puppeteer-core": "^23.11.1"
+  }
 }

@@ -54,6 +54,8 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY package.json ./
 COPY server.js ./
 COPY agent_engine.js ./
+COPY workbench_engine.js ./
+COPY agent_orchestrator.js ./
 COPY db.js ./
 COPY security.js ./
 COPY providers ./providers

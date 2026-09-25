@@ -94,6 +94,8 @@ export async function executeRcPipeline() {
     'package.json',
     'server.js',
     'agent_engine.js',
+    'workbench_engine.js',
+    'agent_orchestrator.js',
     'db.js',
     'security.js',
     'test_endpoints.js',

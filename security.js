@@ -114,6 +114,10 @@ export class SecurityGuard {
     return { allowed: true };
   }
 
+  static validateSafeCommand(command, workspaceRoot = '') {
+    return this.validateCommand(command, workspaceRoot);
+  }
+
   /**
    * True SSRF Protection with DNS resolution
    * Resolves domain to IP and checks against loopback, private subnets, and cloud metadata
@@ -243,4 +247,23 @@ export class SecurityGuard {
 
     return false;
   }
+
+  static async validateTargetUrl(rawUrl) {
+    try {
+      await this.validateUrlWithDns(rawUrl);
+      return { allowed: true };
+    } catch (err) {
+      return { allowed: false, reason: err.message };
+    }
+  }
+
+  static isPathContained(basePath, targetPath) {
+    const resolvedBase = path.resolve(basePath);
+    const resolvedTarget = path.resolve(basePath, targetPath);
+    return resolvedTarget.startsWith(resolvedBase);
+  }
 }
+
+export const validateSafeCommand = SecurityGuard.validateSafeCommand.bind(SecurityGuard);
+export const validateTargetUrl = SecurityGuard.validateTargetUrl.bind(SecurityGuard);
+export const isPathContained = SecurityGuard.isPathContained.bind(SecurityGuard);

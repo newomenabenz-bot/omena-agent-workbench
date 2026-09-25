@@ -101,6 +101,8 @@ const server = http.createServer(async (req, res) => {
       status: isDbHealthy ? 'ok' : 'degraded',
       uptime: process.uptime(),
       db: isDbHealthy ? 'connected' : 'error',
+      executionMode: process.env.EXECUTION_MODE || 'container',
+      executionPrivilege: process.env.EXECUTION_PRIVILEGE || 'standard',
       memory: process.memoryUsage(),
       timestamp: new Date().toISOString()
     });
@@ -119,6 +121,8 @@ const server = http.createServer(async (req, res) => {
       ready: true,
       database: isDbHealthy,
       browser: { active: chromeActive },
+      executionMode: process.env.EXECUTION_MODE || 'container',
+      executionPrivilege: process.env.EXECUTION_PRIVILEGE || 'standard',
       port: PORT,
       timestamp: new Date().toISOString()
     });
@@ -204,11 +208,12 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
-        // Setup SSE Stream
+        // Setup SSE Stream (with reverse proxy unbuffered streaming)
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache, no-transform',
-          'Connection': 'keep-alive'
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no'
         });
 
         const emit = (event) => {
@@ -229,6 +234,56 @@ const server = http.createServer(async (req, res) => {
         }
       }
     });
+    return;
+  }
+
+  // --- Emergency Agent Stop / Kill Mechanism ---
+  if (pathname === '/api/agent/emergency-stop' && req.method === 'POST') {
+    const stopResult = engine.orchestrator.workbench.process.emergencyStop();
+    sendJson(res, 200, { ok: true, result: stopResult });
+    return;
+  }
+
+  // --- Workspace File System API ---
+  if (pathname === '/api/workspace/files' && req.method === 'GET') {
+    try {
+      const files = await engine.orchestrator.workbench.filesystem.listDirectory('.', true);
+      sendJson(res, 200, files);
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/workspace/file' && req.method === 'GET') {
+    const filePath = parsedUrl.searchParams.get('path');
+    if (!filePath) {
+      sendJson(res, 400, { error: 'Missing path parameter' });
+      return;
+    }
+    try {
+      const fileData = await engine.orchestrator.workbench.filesystem.readFile(filePath);
+      sendJson(res, 200, fileData);
+    } catch (err) {
+      sendJson(res, 404, { error: err.message });
+    }
+    return;
+  }
+
+  // --- Process Management API ---
+  if (pathname === '/api/processes' && req.method === 'GET') {
+    sendJson(res, 200, engine.orchestrator.workbench.process.list());
+    return;
+  }
+
+  if (pathname === '/api/processes/kill' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const killRes = engine.orchestrator.workbench.process.kill(body.pid);
+      sendJson(res, 200, killRes);
+    } catch (err) {
+      sendJson(res, 400, { error: err.message });
+    }
     return;
   }
 

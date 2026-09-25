@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import { SecurityGuard } from './security.js';
 import { adapterManager } from './providers/adapter_manager.js';
 import { WorkbenchDatabase } from './db.js';
+import { AgentOrchestrator } from './agent_orchestrator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,6 +22,7 @@ const UPLOADS_DIR = path.join(WORKSPACE_ROOT, 'storage', 'workbench_uploads');
 export class AgentEngine {
   constructor(db = null) {
     this.db = db || new WorkbenchDatabase();
+    this.orchestrator = new AgentOrchestrator(this.db);
     this.ensureDirs();
   }
 
@@ -32,89 +34,16 @@ export class AgentEngine {
 
   /**
    * Process prompt and stream structured events:
-   * text_chunk, tool_start, tool_log, tool_done, browser_frame, done
+   * agent.started, tool.started, terminal.output, file.changed, browser.screenshot, agent.completed
+   * Also translates to legacy tool_start, tool_log, tool_done, browser_frame, done
    */
   async processPromptStream(prompt, emit, options = {}) {
-    const startTime = Date.now();
-    const cleanPrompt = (prompt || '').trim();
-    const sessionId = options.sessionId || 'default_session';
-    const selectedModel = options.model || 'gemini-2.0-flash';
-    const credentials = options.credentials || {};
-
-    const adapter = adapterManager.getAdapter(selectedModel);
-    const capabilities = adapter.getCapabilities();
-
-    // Persist user prompt in SQLite
-    this.db.addMessage(sessionId, {
-      role: 'user',
-      content: cleanPrompt
-    });
-
-    const recordedTools = [];
-    const recordedArtifacts = [];
-    let assistantText = '';
-
-    // Wrapped emitter to collect data for persistence
-    const safeEmit = (event) => {
-      if (event.type === 'text_chunk') {
-        assistantText += event.token || '';
-      } else if (event.type === 'tool_done') {
-        recordedTools.push(event);
-      } else if (event.type === 'browser_frame') {
-        recordedArtifacts.push(event);
-      }
-      emit(event);
-    };
-
-    // Detect Intent
-    const intent = this.detectIntent(cleanPrompt);
-
-    try {
-      const isToolRequest = ['BROWSER', 'SHELL', 'CODE_OR_FILE', 'MEMORY_OR_STATUS'].includes(intent.category);
-
-      if (isToolRequest && capabilities.tools) {
-        if (intent.category === 'BROWSER') {
-          await this.handleBrowserTask(intent, cleanPrompt, safeEmit);
-        } else if (intent.category === 'SHELL') {
-          await this.handleShellTask(intent, cleanPrompt, safeEmit);
-        } else if (intent.category === 'CODE_OR_FILE') {
-          await this.handleFileTask(intent, cleanPrompt, safeEmit);
-        } else if (intent.category === 'MEMORY_OR_STATUS') {
-          await this.handleStatusTask(intent, cleanPrompt, safeEmit);
-        }
-      } else {
-        // Multi-Provider Direct Streaming
-        await adapter.streamChat({
-          prompt: cleanPrompt,
-          credentials,
-          emit: safeEmit
-        });
-
-        if (!assistantText) {
-          await this.handleGeneralTask(cleanPrompt, safeEmit, selectedModel);
-        }
-      }
-    } catch (err) {
-      safeEmit({
-        type: 'text_chunk',
-        token: `\n\n⚠️ **Execution Notice:** ${err.message}`
-      });
-    }
-
-    const durationMs = Date.now() - startTime;
-
-    // Persist assistant response in SQLite
-    this.db.addMessage(sessionId, {
-      role: 'assistant',
-      content: assistantText,
-      tools: recordedTools,
-      artifacts: recordedArtifacts
-    });
-
-    safeEmit({
-      type: 'done',
-      durationMs
-    });
+    return this.orchestrator.runTaskStream({
+      prompt,
+      model: options.model,
+      sessionId: options.sessionId,
+      credentials: options.credentials
+    }, emit);
   }
 
   detectIntent(prompt) {
